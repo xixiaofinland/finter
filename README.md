@@ -3,7 +3,8 @@
 A simple Cli to use Tmux to manage my projects
 
 
-## Bug
+## To-Do
 
-- how to display current session differently?
-- folder with `.` doesn't work
+- Display current session differently?
+- Display existing sessions in the list differently?
+- Build a method to kill the current session without existing tmux?
