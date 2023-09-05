@@ -4,6 +4,11 @@ A simple Cli to use Tmux to manage my projects
 
 [Github repo](https://github.com/xixiaofinland/finter)
 
+# Prerequiste
+
+- [Tmux](https://github.com/tmux/tmux)
+- [Cargo command](https://www.rust-lang.org/tools/install) to install the tool
+
 # What does it do?
 
 Assume you have a path (e.g. `/home/username/projects/`) containing multiple
@@ -16,7 +21,22 @@ Then this Cli tool is for you!
 
 Run `cargo install finter` to install it locally.
 
-# How to use
+# Simple use case
+
+Assume you have multiple projects in path `/home/username/projects/`:
+
+1. run `finter /home/username/proejcts/`
+2. run `finter`, it will pop up all folders in your project path to select
+3. select one will send you to the Tmux session named by your project
+
+I highly recommend you add a hotkey in `.tmux.config` (like mine below), so in Tmux you can quickly
+call the popup windown to create or switch Tmux sessions.
+
+```
+bind C-o display-popup -E "finter"  # `prefix-key C-o` will popup finter
+selection list
+```
+# How it works?
 
 For the first time, `finter` needs to know where your project folders exists, 
 so you need to config it:
@@ -33,14 +53,6 @@ Once the path configration is done (you can verify the `~/.finter` file):
 1. Run `finter` in terminal. It will list all folders in the defined paths
 2. Select any folder in the popup will either spin up a new Tmux session and enter this
    folder, or enter back to the session if it exists already.
-
-I highly recommend you add a hotkey in Tmux `.tmux.config` (like mine below), so you can quickly
-call the popup windown to create or switch Tmux sessions.
-
-```
-bind C-o display-popup -E "finter"  # `prefix-key C-o` will popup finter
-selection list
-```
 
 ## To-Do?
 
