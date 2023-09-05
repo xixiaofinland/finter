@@ -3,6 +3,7 @@ name = "finter"
 authors = ["Xi Xiao<tdxiaoxi2@gmail.com>"]
 version = "0.1.0"
 edition = "2021"
+description = "A simple Cli to use Tmux to manage local projects"
 licsense = "MIT"
 
 [dependencies]
