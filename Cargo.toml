@@ -1,7 +1,7 @@
 [package]
 name = "finter"
 authors = ["Xi Xiao<tdxiaoxi2@gmail.com>"]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A simple Cli to use Tmux to manage local projects"
 license = "MIT OR Apache-2.0"
