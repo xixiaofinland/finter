@@ -3,6 +3,7 @@ name = "finter"
 authors = ["Xi Xiao<tdxiaoxi2@gmail.com>"]
 version = "0.1.0"
 edition = "2021"
+licsense = "MIT"
 
 [dependencies]
 skim = "*"
