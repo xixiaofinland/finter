@@ -130,6 +130,8 @@ fn get_folders(paths: Vec<String>) -> Result<Vec<(String, String)>, Box<dyn Erro
                     .ok_or("expect a file_name()")?
                     .to_str()
                     .ok_or("file_name can't turn to a string")?
+                    .replace(".", "_") // tmux session name doesn't accept "." or ":"
+                    .replace(":", "_")
                     .to_string();
 
                 let full_path = p
