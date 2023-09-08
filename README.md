@@ -35,6 +35,8 @@ bind C-o display-popup -E "finter"  # `prefix-key C-o` will popup finter
 selection list
 ```
 
+![screenshot](https://github.com/xixiaofinland/finter/blob/master/pic/1.png)
+
 # How to install
 
 You need to have [Cargo command](https://www.rust-lang.org/tools/install) to install the tool
