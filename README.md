@@ -1,34 +1,21 @@
-# Finter
+# The Need for Finter
 
-A Tmux session add-on that allows to quickly create and switch sessions based on
-folders using fuzzy search.
+I want to run each folder/project in its own Tmux session, and can quickly jump
+between sessions. For instance, `folder
+A` is a open source project, `folder B` is a work project, etc.
+
+Finter allows me to quickly create and switch sessions based on
+folder names, and it supports fuzzy search. It is a little Tmux add-on.
 
 [Github repo](https://github.com/xixiaofinland/finter)
 
-# Prerequiste
+# How it works
 
-- [Tmux](https://github.com/tmux/tmux)
-
-# What does it do?
-
-You give path(s) (e.g. `/home/username/projects/`) which includes folders
-inside. `Finter` can easily create or jump between their Tmux sessions.
-
-
-# Simple use case
-
-Assume you have multiple folders in path `/home/username/projects/`:
-
-1. run `finter /home/username/proejcts/` to tell finter where to search for
-   folders
-2. then run `finter`, it will pop up all folders in the pick list 
-3. selecting by fuzzy search will send you to the Tmux session named by the
-   folder name.
-
-`Finter` allows you to easily have separated sessions for each folders.
-
-I highly recommend you add a hotkey in `.tmux.config` (like mine below), so in Tmux you can quickly
-call the popup windown to run `Finter`.
+1. Define the path(s) where folders reside, e.g. `finter /home/username/proejcts/`
+2. Add `Finter` hotkey in the `.tmux.conf` so it opens in a pop up (config
+   below)
+3. Run the hotkey `Prefix C-o` in Tmux to create or jump to that Tmux session
+   (screenshot below)
 
 ```
 bind C-o display-popup -E "finter"  # `prefix-key C-o` will popup finter
@@ -43,6 +30,8 @@ You need to have [Cargo command](https://www.rust-lang.org/tools/install) to ins
 Run `cargo install finter` to install it locally.
 
 # How it works?
+
+Check the source code or short description below.
 
 For the first time, `finter` needs to know where your folders exists, 
 so you need to config it:
