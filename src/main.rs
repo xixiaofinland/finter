@@ -29,6 +29,36 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         save_paths(args)
     }
+    // Some(("kill", _)) => {
+    //     let defaults = confy::load::<Config>("tms", None)
+    //         .into_report()
+    //         .change_context(ConfigError::LoadError)
+    //         .attach_printable("Failed to load the config file")
+    //         .change_context(TmsError::ConfigError)?;
+    //     let mut current_session =
+    //         String::from_utf8(execute_tmux_command("tmux display-message -p '#S'").stdout)
+    //             .expect("The tmux command static string should always be valid utf-9");
+    //     current_session.retain(|x| x != '\'' && x != '\n');
+    //
+    //     let sessions =
+    //         String::from_utf8(execute_tmux_command("tmux list-sessions -F #S").stdout)
+    //             .expect("The tmux command static string should always be valid utf-9");
+    //     let sessions: Vec<&str> = sessions.lines().collect();
+    //
+    //     let to_session = if defaults.default_session.is_some()
+    //         && sessions.contains(&defaults.default_session.clone().unwrap().as_str())
+    //         && current_session != defaults.default_session.clone().unwrap()
+    //     {
+    //         defaults.default_session.unwrap()
+    //     } else if current_session != sessions[0] {
+    //         sessions[0].to_string()
+    //     } else {
+    //         sessions.get(1).unwrap_or_else(|| &sessions[0]).to_string()
+    //     };
+    //     execute_tmux_command(&format!("tmux switch-client -t {to_session}"));
+    //     execute_tmux_command(&format!("tmux kill-session -t {current_session}"));
+    //     Ok(SubCommandGiven::Yes)
+    // }
 }
 
 fn run_finter() -> Result<(), Box<dyn Error>> {
