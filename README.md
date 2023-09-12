@@ -1,11 +1,18 @@
 # The Need for Finter
 
-I want to run each folder/project in its own Tmux session, and can quickly jump
-between sessions. For instance, `folder
-A` is a open source project, `folder B` is a work project, etc.
+I use Tmux to handle sessions and windows in terminal. [my Tmux config
+file](https://github.com/xixiaofinland/dotfiles/blob/main/.tmux.conf).
 
-Finter allows me to quickly create and switch sessions based on
-folder names, and it supports fuzzy search. It is a little Tmux add-on.
+Everything is cool, except one feature is missing... What is it?
+
+I want to quickly list a bunch of folders and create a Tmux session with
+the folder name I select.
+
+This helps me to mentally isolate the work between folders/projects. 
+
+For instance, I hit a hotkey to pop up the list of folders/projects, I select one by fuzzy search, bang! the new session is created.
+
+Finter is born to fulfil this demand.
 
 [Github repo](https://github.com/xixiaofinland/finter)
 
