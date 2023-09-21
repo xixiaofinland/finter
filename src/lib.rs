@@ -19,6 +19,12 @@ impl SkimItem for Project {
     // }
 }
 
+pub fn save_paths(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let paths = args.join("\n");
+    fs::write(get_config_file_path(), paths).expect("Unable to write file");
+    Ok(())
+}
+
 pub fn run_finter() -> Result<(), Box<dyn Error>> {
     let paths = load_project_paths()?;
     let folders = get_folders(paths)?;
@@ -44,7 +50,7 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub fn get_match(folder: String, projects: Vec<Project>) -> Result<Project, Box<dyn Error>> {
+fn get_match(folder: String, projects: Vec<Project>) -> Result<Project, Box<dyn Error>> {
     for p in projects.into_iter() {
         if folder == p.folder {
             return Ok(p);
@@ -177,12 +183,6 @@ fn select_in_skim(projects: Vec<Project>) -> Result<String, Box<dyn Error>> {
         .ok_or("no item in Skim is selected")?
         .output()
         .to_string())
-}
-
-pub fn save_paths(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let paths = args.join("\n");
-    fs::write(get_config_file_path(), paths).expect("Unable to write file");
-    Ok(())
 }
 
 fn run_tmux_with_params(command: &str) -> process::Output {
