@@ -14,9 +14,13 @@ impl SkimItem for Project {
     fn text(&self) -> Cow<str> {
         Cow::Borrowed(&self.folder)
     }
-    // fn preview(&self, _context: PreviewContext) -> ItemPreview {
-    //     ItemPreview::Text(self.folder)
-    // }
+
+    fn display<'a>(&'a self, _context: DisplayContext<'a>) -> AnsiString<'a> {
+        if self.session_exists {
+            return AnsiString::from(format!("*{}", self.folder));
+        }
+        return AnsiString::from(self.folder.clone());
+    }
 }
 
 pub fn save_paths(args: &[String]) -> Result<(), Box<dyn Error>> {
