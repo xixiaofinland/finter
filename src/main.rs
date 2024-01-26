@@ -14,7 +14,7 @@ pub struct Args {
 // --------------------------------------------------
 fn main() {
     let args = Args::parse();
-    println!("{:?}", args);
+
     if let Err(e) = run(args) {
         eprint!("{}", e);
         std::process::exit(1);

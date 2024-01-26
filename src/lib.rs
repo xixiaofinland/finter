@@ -19,7 +19,7 @@ impl SkimItem for Project {
         if self.session_exists {
             return AnsiString::from(format!("*{}", self.folder));
         }
-        return AnsiString::from(self.folder.clone());
+        return AnsiString::from(format!(" {}", self.folder));
     }
 }
 
