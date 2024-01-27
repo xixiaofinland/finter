@@ -58,6 +58,4 @@ Once the path configration is done (you can verify the `~/.finter` file):
 
 ## To-Do?
 
-- Display current session differently?
-- Display existing sessions in the list differently?
-- Build a method to kill the current session without existing tmux?
+- Display existing session in different color?
