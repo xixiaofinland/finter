@@ -158,7 +158,7 @@ fn get_sessions() -> Result<Vec<String>, Box<dyn Error>> {
 
 fn select_in_skim(projects: Vec<Project>) -> Result<String, Box<dyn Error>> {
     let options = SkimOptionsBuilder::default()
-        .height(Some("50%"))
+        .height(Some("100%"))
         .multi(false)
         .color(Some("dark"))
         .preview(None)
