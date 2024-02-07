@@ -19,7 +19,7 @@ impl SkimItem for Project {
         if self.session_exists {
             return AnsiString::from(format!("*{}", self.folder));
         }
-        return AnsiString::from(format!(" {}", self.folder));
+        AnsiString::from(format!(" {}", self.folder))
     }
 }
 
@@ -60,7 +60,7 @@ fn get_match(folder: String, projects: Vec<Project>) -> Result<Project, Box<dyn 
             return Ok(p);
         }
     }
-    return Err("selected value not found in projects?".into());
+    Err("selected value not found in projects?".into())
 }
 
 fn build_projects(
@@ -128,7 +128,7 @@ fn get_folders(paths: Vec<String>) -> Result<Vec<(String, String)>, Box<dyn Erro
                     .ok_or("expect a file_name()")?
                     .to_str()
                     .ok_or("file_name can't turn to a string")?
-                    .replace(".", "_") // tmux session name doesn't accept "." or ":"
+                    .replace('.', "_") // tmux session name doesn't accept "." or ":"
                     .replace(":", "_")
                     .to_string();
 
@@ -172,18 +172,18 @@ fn select_in_skim(projects: Vec<Project>) -> Result<String, Box<dyn Error>> {
 
     let skim_output = Skim::run_with(&options, Some(rx_item));
 
-    let skim_result;
-    match skim_output {
-        Some(value) => skim_result = value,
+    let skim_result = match skim_output {
+        Some(value) => value,
         None => return Err("Skim internal error.".into()),
-    }
+    };
+
     if skim_result.is_abort {
         return Err("No selection made.".into());
     }
 
     Ok(skim_result
         .selected_items
-        .get(0)
+        .first()
         .ok_or("no item in Skim is selected")?
         .output()
         .to_string())
