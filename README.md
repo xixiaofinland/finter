@@ -3,16 +3,16 @@
 I use Tmux to handle sessions and windows in terminal. [my Tmux config
 file](https://github.com/xixiaofinland/dotfiles/blob/main/.tmux.conf).
 
-Everything is cool, except one feature is missing... What is it?
+Everything is cool, except one feature is missing...
 
 I want to quickly list a bunch of folders and create a Tmux session with
-the folder name I select.
+the selected folder name.
 
-This helps me to mentally isolate the work between folders/projects. 
+This creates sessions between folders/projects to isolate workspaces.
 
 For instance, I hit a hotkey to pop up the list of folders/projects, I select one by fuzzy search, bang! the new session is created.
 
-Finter is born to fulfil this demand.
+Finter is born to fulfill this demand.
 
 [Github repo](https://github.com/xixiaofinland/finter)
 
