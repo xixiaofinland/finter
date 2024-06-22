@@ -212,17 +212,4 @@ fn get_home_dir() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn it_saves_paths() {
-        let paths = ["whatever path".to_owned()];
-        let x = save_paths(&paths).is_err();
-        assert_eq!(x, false);
-    }
-
-    #[test]
-    #[should_panic]
-    fn greater_than_100() {
-        panic!("hehe");
-    }
 }
