@@ -43,7 +43,12 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
     let path = selected_project.path;
 
     if !selected_project.session_exists {
+        // tmux new-session -d -s mysession \; new-window -t mysession \; select-window -t mysession:1
         let params = &format!("new-session -ds {session_name} -c {path}");
+        run_tmux_with_params(params);
+        let params = &format!("new-window -t {session_name} -c {path}");
+        run_tmux_with_params(params);
+        let params = &format!("select-window -t {session_name}:1");
         run_tmux_with_params(params);
     }
 
