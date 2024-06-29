@@ -3,7 +3,7 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(
     author = "Xi Xiao",
-    version = "0.1.12",
+    version = "0.1.13",
     about = "A Tmux plugin to quickly create session for folders in configured paths."
 )]
 pub struct Args {

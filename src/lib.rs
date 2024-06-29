@@ -38,6 +38,8 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
 
     let selected = select_in_skim(projects.clone())?;
     let selected_project = get_match(selected, projects)?;
+    let selected_project2 = selected_project.clone();
+    println!("{:?}", selected_project2);
 
     let session_name = selected_project.folder;
     let path = selected_project.path;
@@ -50,6 +52,7 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
         run_tmux_with_params(params);
         let params = &format!("select-window -t {session_name}:1");
         run_tmux_with_params(params);
+        println!("new session tmux done");
     }
 
     let result = run_tmux_with_params(&format!("switch-client -t {session_name}"));
