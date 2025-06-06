@@ -1,7 +1,7 @@
 [package]
 name = "finter"
 authors = ["Xi Xiao <tdxiaoxi2@gmail.com>"]
-version = "0.1.14"
+version = "0.1.15"
 edition = "2021"
 description = "A Tmux plugin to quickly create session for folders in configured paths."
 license = "MIT OR Apache-2.0"
