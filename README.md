@@ -35,10 +35,18 @@ bind C-o display-popup -E "finter"
 - Reads configured roots from `~/.finter` (one absolute path per line).
 - Scans immediate child directories of those roots.
 - Lists those folders together with existing tmux session names.
+- Always includes a built-in `ssh_mac_mini` item for a dedicated SSH session.
 - Uses a popup-compatible fuzzy selector (`skim`).
 - On select:
   - existing session: switch/attach to it
-  - missing session: create detached session in folder, create a second window, then switch/attach
+  - missing project session: create detached session in folder, create a second window, then switch/attach
+  - missing `ssh_mac_mini` session: create one window and auto-run SSH, then switch/attach
+
+`ssh_mac_mini` details:
+
+- Default connect command is `ssh xixiao@192.168.1.200`.
+- Optional fallback: set `FINTER_SSH_TAILSCALE_TARGET` (for example `xixiao@macmini.tailnet.ts.net`).
+- When fallback is set, `finter` tries LAN first and uses the fallback target if LAN SSH is unreachable.
 
 ## Docs
 

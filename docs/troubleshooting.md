@@ -54,6 +54,22 @@ Fix:
 tmux list-sessions
 ```
 
+## `ssh_mac_mini` does not use Tailscale fallback
+
+Cause:
+
+- `FINTER_SSH_TAILSCALE_TARGET` is not set in the environment where tmux launches `finter`.
+
+Fix:
+
+- Export the variable before starting tmux, for example:
+
+```bash
+export FINTER_SSH_TAILSCALE_TARGET="xixiao@macmini.tailnet.ts.net"
+```
+
+- Restart tmux server if needed so popup commands inherit updated environment.
+
 ## Canceled picker
 
 Cause:

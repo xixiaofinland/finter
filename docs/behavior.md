@@ -39,6 +39,7 @@ Runtime path:
 
 - Existing tmux sessions are prefixed with `*` in display.
 - New folder sessions are prefixed with a space.
+- Built-in `ssh_mac_mini` is always included and pinned near the top.
 
 ## Session Creation Details
 
@@ -48,6 +49,19 @@ When selecting a folder with no existing session:
 2. `tmux new-window -t <name>:2 -c <path>`
 3. `tmux select-window -t <name>:1`
 4. switch/attach client
+
+When selecting `ssh_mac_mini` with no existing session:
+
+1. `tmux new-session -ds ssh_mac_mini -c <home>`
+2. `tmux send-keys -t ssh_mac_mini:1 "<ssh connect command>" C-m`
+3. switch/attach client
+
+If `ssh_mac_mini` already exists, `finter` only switches/attaches and does not send additional commands.
+
+`<ssh connect command>` is:
+
+- `ssh xixiao@192.168.1.200` by default
+- with `FINTER_SSH_TAILSCALE_TARGET` set: `if nc -z -w2 192.168.1.200 22; then ssh xixiao@192.168.1.200; else ssh <tailscale_target>; fi`
 
 ## Known Caveats
 
