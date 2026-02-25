@@ -1,0 +1,10 @@
+roots = [
+    "/home/username/projects",
+    "/home/username/work",
+]
+
+[ssh]
+session_name = "ssh_mac_mini"
+primary = "user@192.168.1.200"
+# Optional Tailscale fallback target
+# tailscale = "user@macmini.tailnet.ts.net"

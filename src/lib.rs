@@ -1,11 +1,34 @@
+use serde::{Deserialize, Serialize};
 use skim::prelude::*;
 use std::{error::Error, fs, path::Path, process};
 
 pub type MyResult<T> = Result<T, Box<dyn Error>>;
 
-const SSH_SESSION_NAME: &str = "ssh_mac_mini";
-const SSH_PRIMARY_CMD: &str = "ssh xixiao@192.168.1.200";
-const SSH_TAILSCALE_TARGET_ENV: &str = "FINTER_SSH_TAILSCALE_TARGET";
+const DEFAULT_SSH_SESSION_NAME: &str = "ssh_mac_mini";
+const DEFAULT_SSH_PRIMARY_TARGET: &str = "xixiao@192.168.1.200";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Config {
+    roots: Vec<String>,
+    ssh: SshConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SshConfig {
+    session_name: String,
+    primary: String,
+    tailscale: Option<String>,
+}
+
+impl Default for SshConfig {
+    fn default() -> Self {
+        Self {
+            session_name: DEFAULT_SSH_SESSION_NAME.to_string(),
+            primary: DEFAULT_SSH_PRIMARY_TARGET.to_string(),
+            tailscale: None,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Project {
@@ -16,7 +39,7 @@ pub struct Project {
 }
 
 impl SkimItem for Project {
-    fn text(&self) -> Cow<str> {
+    fn text(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.folder)
     }
 
@@ -29,17 +52,29 @@ impl SkimItem for Project {
 }
 
 pub fn save_paths(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let paths = args.join("\n");
-    fs::write(get_config_file_path(), paths).expect("Unable to write file");
+    let config_file_path = get_config_file_path();
+    let mut config = if Path::new(&config_file_path).exists() {
+        load_config()?
+    } else {
+        Config {
+            roots: Vec::new(),
+            ssh: SshConfig::default(),
+        }
+    };
+
+    config.roots = args.to_vec();
+    let content = toml::to_string_pretty(&config)?;
+    fs::write(config_file_path, content).expect("Unable to write file");
     Ok(())
 }
 
 pub fn run_finter() -> Result<(), Box<dyn Error>> {
-    let paths = load_project_paths()?;
+    let config = load_config()?;
+    let paths = load_project_paths(&config)?;
     let folders = get_folders(paths)?;
     let sessions = get_sessions()?;
 
-    let projects = build_projects(folders, sessions)?;
+    let projects = build_projects(folders, sessions, &config.ssh.session_name)?;
 
     let selected = select_in_skim(projects.clone())?;
     let selected_project = get_match(selected, projects)?;
@@ -51,7 +86,7 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
         run_tmux_with_args(&["new-session", "-ds", &session_name, "-c", &path]);
 
         if selected_project.is_ssh_session {
-            let ssh_connect_cmd = build_ssh_connect_cmd();
+            let ssh_connect_cmd = build_ssh_connect_cmd(&config.ssh);
             run_tmux_with_args(&[
                 "send-keys",
                 "-t",
@@ -90,12 +125,13 @@ fn get_match(folder: String, projects: Vec<Project>) -> Result<Project, Box<dyn 
 fn build_projects(
     folders: Vec<(String, String)>,
     sessions: Vec<String>,
+    ssh_session_name: &str,
 ) -> Result<Vec<Project>, Box<dyn Error>> {
     let mut projects = Vec::new();
-    let ssh_session_exists = sessions.iter().any(|s| s == SSH_SESSION_NAME);
+    let ssh_session_exists = sessions.iter().any(|s| s == ssh_session_name);
 
     sessions.iter().for_each(|s| {
-        if s != SSH_SESSION_NAME {
+        if s != ssh_session_name {
             projects.push(Project {
                 folder: s.to_string(),
                 path: get_home_dir(),
@@ -108,7 +144,7 @@ fn build_projects(
     projects.insert(
         0,
         Project {
-            folder: SSH_SESSION_NAME.to_string(),
+            folder: ssh_session_name.to_string(),
             path: get_home_dir(),
             session_exists: ssh_session_exists,
             is_ssh_session: true,
@@ -117,7 +153,7 @@ fn build_projects(
 
     folders
         .iter()
-        .filter(|f| f.0 != SSH_SESSION_NAME)
+        .filter(|f| f.0 != ssh_session_name)
         .filter(|f| !sessions.contains(&f.0))
         .for_each(|(folder, path)| {
             projects.push(Project {
@@ -131,16 +167,12 @@ fn build_projects(
     Ok(projects)
 }
 
-fn load_project_paths() -> Result<Vec<String>, Box<dyn Error>> {
-    let config_file_location = get_config_file_path();
-    let file_content =
-        fs::read_to_string(config_file_location).expect("Should be able to read config file.");
-    let paths: Vec<_> = file_content.lines().collect();
-
-    let folders: Vec<String> = paths
+fn load_project_paths(config: &Config) -> Result<Vec<String>, Box<dyn Error>> {
+    let folders: Vec<String> = config
+        .roots
         .iter()
         .filter(|p| Path::new(p).is_dir())
-        .map(|&s| s.into())
+        .cloned()
         .collect();
 
     match folders.len() {
@@ -151,8 +183,30 @@ fn load_project_paths() -> Result<Vec<String>, Box<dyn Error>> {
 
 fn get_config_file_path() -> String {
     let mut config_file_location = get_home_dir();
-    config_file_location.push_str("/.finter");
+    config_file_location.push_str("/.finter.toml");
     config_file_location
+}
+
+fn parse_config(content: &str) -> Result<Config, Box<dyn Error>> {
+    Ok(toml::from_str(content)?)
+}
+
+fn load_config() -> Result<Config, Box<dyn Error>> {
+    let config_file_location = get_config_file_path();
+    let file_content = fs::read_to_string(&config_file_location).map_err(|_| {
+        format!(
+            "Err: config file is missing. create `{}` with roots/ssh settings or run `finter -d <ABS_PATH> ...` first.",
+            config_file_location
+        )
+    })?;
+
+    parse_config(&file_content).map_err(|e| {
+        format!(
+            "Err: invalid TOML config at `{}`: {}",
+            config_file_location, e
+        )
+        .into()
+    })
 }
 
 fn get_folders(paths: Vec<String>) -> Result<Vec<(String, String)>, Box<dyn Error>> {
@@ -237,16 +291,13 @@ fn run_tmux_with_args(args: &[&str]) -> process::Output {
         .unwrap_or_else(|_| panic!("Failed to run tmux with args: `{}`", args.join(" ")))
 }
 
-fn build_ssh_connect_cmd() -> String {
-    build_ssh_connect_cmd_with_target(std::env::var(SSH_TAILSCALE_TARGET_ENV).ok().as_deref())
-}
-
-fn build_ssh_connect_cmd_with_target(tailscale_target: Option<&str>) -> String {
-    match tailscale_target {
+fn build_ssh_connect_cmd(ssh: &SshConfig) -> String {
+    let primary_cmd = format!("ssh {}", ssh.primary);
+    match ssh.tailscale.as_deref() {
         Some(target) if !target.trim().is_empty() => {
-            format!("if nc -z -w2 192.168.1.200 22; then {SSH_PRIMARY_CMD}; else ssh {target}; fi")
+            format!("if nc -z -w2 192.168.1.200 22; then {primary_cmd}; else ssh {target}; fi")
         }
-        _ => SSH_PRIMARY_CMD.to_string(),
+        _ => primary_cmd,
     }
 }
 
@@ -265,16 +316,25 @@ fn get_home_dir() -> String {
 mod tests {
     use super::*;
 
+    fn default_ssh() -> SshConfig {
+        SshConfig {
+            session_name: DEFAULT_SSH_SESSION_NAME.to_string(),
+            primary: DEFAULT_SSH_PRIMARY_TARGET.to_string(),
+            tailscale: None,
+        }
+    }
+
     fn count_by_name(projects: &[Project], name: &str) -> usize {
         projects.iter().filter(|p| p.folder == name).count()
     }
 
     #[test]
     fn build_projects_always_includes_ssh_item() {
-        let projects = build_projects(vec![], vec![]).expect("build should succeed");
+        let projects =
+            build_projects(vec![], vec![], DEFAULT_SSH_SESSION_NAME).expect("build should succeed");
 
-        assert_eq!(projects[0].folder, SSH_SESSION_NAME);
-        assert_eq!(count_by_name(&projects, SSH_SESSION_NAME), 1);
+        assert_eq!(projects[0].folder, DEFAULT_SSH_SESSION_NAME);
+        assert_eq!(count_by_name(&projects, DEFAULT_SSH_SESSION_NAME), 1);
         assert!(!projects[0].session_exists);
         assert!(projects[0].is_ssh_session);
     }
@@ -283,13 +343,14 @@ mod tests {
     fn build_projects_marks_existing_ssh_session() {
         let projects = build_projects(
             vec![],
-            vec![SSH_SESSION_NAME.to_string(), "work".to_string()],
+            vec![DEFAULT_SSH_SESSION_NAME.to_string(), "work".to_string()],
+            DEFAULT_SSH_SESSION_NAME,
         )
         .expect("build should succeed");
 
         let ssh = projects
             .iter()
-            .find(|p| p.folder == SSH_SESSION_NAME)
+            .find(|p| p.folder == DEFAULT_SSH_SESSION_NAME)
             .expect("ssh item should exist");
         assert!(ssh.session_exists);
         assert!(ssh.is_ssh_session);
@@ -306,15 +367,16 @@ mod tests {
     fn build_projects_does_not_duplicate_ssh_from_folders() {
         let folders = vec![
             (
-                SSH_SESSION_NAME.to_string(),
+                DEFAULT_SSH_SESSION_NAME.to_string(),
                 "/tmp/ssh_mac_mini".to_string(),
             ),
             ("repo1".to_string(), "/tmp/repo1".to_string()),
         ];
 
-        let projects = build_projects(folders, vec![]).expect("build should succeed");
+        let projects = build_projects(folders, vec![], DEFAULT_SSH_SESSION_NAME)
+            .expect("build should succeed");
 
-        assert_eq!(count_by_name(&projects, SSH_SESSION_NAME), 1);
+        assert_eq!(count_by_name(&projects, DEFAULT_SSH_SESSION_NAME), 1);
         assert_eq!(count_by_name(&projects, "repo1"), 1);
     }
 
@@ -323,7 +385,8 @@ mod tests {
         let folders = vec![("repo1".to_string(), "/tmp/repo1".to_string())];
         let sessions = vec!["repo1".to_string()];
 
-        let projects = build_projects(folders, sessions).expect("build should succeed");
+        let projects = build_projects(folders, sessions, DEFAULT_SSH_SESSION_NAME)
+            .expect("build should succeed");
 
         assert_eq!(count_by_name(&projects, "repo1"), 1);
         let repo = projects
@@ -336,19 +399,56 @@ mod tests {
 
     #[test]
     fn build_ssh_connect_cmd_without_tailscale_target_uses_primary() {
-        assert_eq!(build_ssh_connect_cmd_with_target(None), SSH_PRIMARY_CMD);
+        let ssh = default_ssh();
+        assert_eq!(build_ssh_connect_cmd(&ssh), "ssh xixiao@192.168.1.200");
+
+        let ssh_blank = SshConfig {
+            tailscale: Some("   ".to_string()),
+            ..default_ssh()
+        };
         assert_eq!(
-            build_ssh_connect_cmd_with_target(Some("   ")),
-            SSH_PRIMARY_CMD
+            build_ssh_connect_cmd(&ssh_blank),
+            "ssh xixiao@192.168.1.200"
         );
     }
 
     #[test]
     fn build_ssh_connect_cmd_with_tailscale_target_uses_fallback_flow() {
-        let command = build_ssh_connect_cmd_with_target(Some("xixiao@macmini.example.ts.net"));
+        let ssh = SshConfig {
+            tailscale: Some("xixiao@macmini.example.ts.net".to_string()),
+            ..default_ssh()
+        };
+        let command = build_ssh_connect_cmd(&ssh);
 
         assert!(command.contains("nc -z -w2 192.168.1.200 22"));
-        assert!(command.contains(SSH_PRIMARY_CMD));
+        assert!(command.contains("ssh xixiao@192.168.1.200"));
         assert!(command.contains("ssh xixiao@macmini.example.ts.net"));
+    }
+
+    #[test]
+    fn parse_config_requires_ssh_section() {
+        let content = r#"roots = ["/tmp"]"#;
+        assert!(parse_config(content).is_err());
+    }
+
+    #[test]
+    fn parse_config_reads_roots_and_ssh() {
+        let content = r#"
+roots = ["/work/a", "/work/b"]
+
+[ssh]
+session_name = "ssh_mac_mini"
+primary = "xixiao@192.168.1.200"
+tailscale = "xixiao@macmini.tailnet.ts.net"
+"#;
+
+        let cfg = parse_config(content).expect("config should parse");
+        assert_eq!(cfg.roots.len(), 2);
+        assert_eq!(cfg.ssh.session_name, "ssh_mac_mini");
+        assert_eq!(cfg.ssh.primary, "xixiao@192.168.1.200");
+        assert_eq!(
+            cfg.ssh.tailscale,
+            Some("xixiao@macmini.tailnet.ts.net".to_string())
+        );
     }
 }

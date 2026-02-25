@@ -10,9 +10,9 @@
 Runtime path:
 
 1. Parse args with `clap`.
-2. If `-d/--directory` is provided, save roots to `~/.finter`.
+2. If `-d/--directory` is provided, save/update roots in `~/.finter.toml`.
 3. Otherwise:
-   - load configured roots
+   - load configured roots and ssh settings
    - scan immediate child directories
    - load tmux sessions
    - build picker items
@@ -21,8 +21,9 @@ Runtime path:
 
 ## Core Functions
 
-- `save_paths(args)`: writes roots to `~/.finter`
-- `load_project_paths()`: reads and validates root paths
+- `save_paths(args)`: writes/updates roots in `~/.finter.toml`
+- `load_config()`: reads and parses `~/.finter.toml`
+- `load_project_paths(...)`: validates root paths
 - `get_folders(paths)`: lists folders under roots
 - `get_sessions()`: reads `tmux list-sessions -F #S`
 - `build_projects(...)`: merges folder list + existing sessions
@@ -39,7 +40,7 @@ Runtime path:
 
 - Existing tmux sessions are prefixed with `*` in display.
 - New folder sessions are prefixed with a space.
-- Built-in `ssh_mac_mini` is always included and pinned near the top.
+- Configured SSH session (`ssh.session_name`) is always included and pinned near the top.
 
 ## Session Creation Details
 
@@ -50,18 +51,18 @@ When selecting a folder with no existing session:
 3. `tmux select-window -t <name>:1`
 4. switch/attach client
 
-When selecting `ssh_mac_mini` with no existing session:
+When selecting configured SSH session with no existing session:
 
-1. `tmux new-session -ds ssh_mac_mini -c <home>`
-2. `tmux send-keys -t ssh_mac_mini:1 "<ssh connect command>" C-m`
+1. `tmux new-session -ds <ssh.session_name> -c <home>`
+2. `tmux send-keys -t <ssh.session_name>:1 "<ssh connect command>" C-m`
 3. switch/attach client
 
-If `ssh_mac_mini` already exists, `finter` only switches/attaches and does not send additional commands.
+If configured SSH session already exists, `finter` only switches/attaches and does not send additional commands.
 
 `<ssh connect command>` is:
 
-- `ssh xixiao@192.168.1.200` by default
-- with `FINTER_SSH_TAILSCALE_TARGET` set: `if nc -z -w2 192.168.1.200 22; then ssh xixiao@192.168.1.200; else ssh <tailscale_target>; fi`
+- `ssh <ssh.primary>`
+- with `ssh.tailscale` set: `if nc -z -w2 192.168.1.200 22; then ssh <ssh.primary>; else ssh <ssh.tailscale>; fi`
 
 ## Known Caveats
 

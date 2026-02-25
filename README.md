@@ -32,21 +32,37 @@ bind C-o display-popup -E "finter"
 
 ## What It Does
 
-- Reads configured roots from `~/.finter` (one absolute path per line).
+- Reads configured roots and SSH settings from `~/.finter.toml`.
 - Scans immediate child directories of those roots.
 - Lists those folders together with existing tmux session names.
-- Always includes a built-in `ssh_mac_mini` item for a dedicated SSH session.
+- Always includes the configured SSH session item (default: `ssh_mac_mini`).
 - Uses a popup-compatible fuzzy selector (`skim`).
 - On select:
   - existing session: switch/attach to it
   - missing project session: create detached session in folder, create a second window, then switch/attach
-  - missing `ssh_mac_mini` session: create one window and auto-run SSH, then switch/attach
+  - missing SSH session: create one window and auto-run SSH, then switch/attach
 
-`ssh_mac_mini` details:
+Default `~/.finter.toml` (created by `finter -d ...`):
 
-- Default connect command is `ssh xixiao@192.168.1.200`.
-- Optional fallback: set `FINTER_SSH_TAILSCALE_TARGET` (for example `xixiao@macmini.tailnet.ts.net`).
-- When fallback is set, `finter` tries LAN first and uses the fallback target if LAN SSH is unreachable.
+```toml
+roots = [
+    "/home/username/projects",
+    "/home/username/work",
+]
+
+[ssh]
+session_name = "ssh_mac_mini"
+primary = "user@192.168.1.200"
+```
+
+You can also copy the repo template: `.finter.toml.example`.
+
+SSH details:
+
+- Connect command is built from `ssh.primary`.
+- Optional fallback is `ssh.tailscale` in TOML (for example `user@macmini.tailnet.ts.net`).
+- When `ssh.tailscale` is set, `finter` tries LAN first and falls back only if LAN SSH is unreachable.
+- Legacy `~/.finter` path-list config is no longer read.
 
 ## Docs
 

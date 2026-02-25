@@ -18,12 +18,30 @@ Ensure Cargo bin directory is on `PATH` (commonly `~/.cargo/bin`).
 
 Cause:
 
-- `~/.finter` is missing, empty, or contains no valid directories.
+- `~/.finter.toml` is missing, has empty `roots`, or all configured roots are invalid.
 
 Fix:
 
 ```bash
 finter -d /absolute/path/one /absolute/path/two
+```
+
+## `Err: invalid TOML config ...`
+
+Cause:
+
+- `~/.finter.toml` is malformed, or required fields are missing.
+
+Fix:
+
+- Ensure config includes both `roots` and `[ssh]`:
+
+```toml
+roots = ["/home/username/projects"]
+
+[ssh]
+session_name = "ssh_mac_mini"
+primary = "user@192.168.1.200"
 ```
 
 ## `Err: no folder is found in the configured paths.`
@@ -54,21 +72,22 @@ Fix:
 tmux list-sessions
 ```
 
-## `ssh_mac_mini` does not use Tailscale fallback
+## SSH session does not use Tailscale fallback
 
 Cause:
 
-- `FINTER_SSH_TAILSCALE_TARGET` is not set in the environment where tmux launches `finter`.
+- `ssh.tailscale` is missing or empty in `~/.finter.toml`.
 
 Fix:
 
-- Export the variable before starting tmux, for example:
+- Set `ssh.tailscale` in `~/.finter.toml`, for example:
 
-```bash
-export FINTER_SSH_TAILSCALE_TARGET="xixiao@macmini.tailnet.ts.net"
+```toml
+[ssh]
+tailscale = "user@macmini.tailnet.ts.net"
 ```
 
-- Restart tmux server if needed so popup commands inherit updated environment.
+- Restart tmux server if the popup still uses stale config/environment.
 
 ## Canceled picker
 
