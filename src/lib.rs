@@ -73,8 +73,14 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
     let paths = load_project_paths(&config)?;
     let folders = get_folders(paths)?;
     let sessions = get_sessions()?;
+    let current_session = get_current_session();
 
-    let projects = build_projects(folders, sessions, &config.ssh.session_name)?;
+    let projects = build_projects(
+        folders,
+        sessions,
+        &config.ssh.session_name,
+        current_session.as_deref(),
+    )?;
 
     let selected = select_in_skim(projects.clone())?;
     let selected_project = get_match(selected, projects)?;
@@ -126,6 +132,7 @@ fn build_projects(
     folders: Vec<(String, String)>,
     sessions: Vec<String>,
     ssh_session_name: &str,
+    current_session: Option<&str>,
 ) -> Result<Vec<Project>, Box<dyn Error>> {
     let mut projects = Vec::new();
     let ssh_session_exists = sessions.iter().any(|s| s == ssh_session_name);
@@ -141,15 +148,12 @@ fn build_projects(
         }
     });
 
-    projects.insert(
-        0,
-        Project {
-            folder: ssh_session_name.to_string(),
-            path: get_home_dir(),
-            session_exists: ssh_session_exists,
-            is_ssh_session: true,
-        },
-    );
+    projects.push(Project {
+        folder: ssh_session_name.to_string(),
+        path: get_home_dir(),
+        session_exists: ssh_session_exists,
+        is_ssh_session: true,
+    });
 
     folders
         .iter()
@@ -163,6 +167,13 @@ fn build_projects(
                 is_ssh_session: false,
             })
         });
+
+    if let Some(current) = current_session {
+        if let Some(idx) = projects.iter().position(|p| p.folder == current) {
+            let current_project = projects.remove(idx);
+            projects.insert(0, current_project);
+        }
+    }
 
     Ok(projects)
 }
@@ -250,6 +261,20 @@ fn get_sessions() -> Result<Vec<String>, Box<dyn Error>> {
     Ok(sessions)
 }
 
+fn get_current_session() -> Option<String> {
+    let output = run_tmux_with_args(&["display-message", "-p", "#S"]);
+    if !output.status.success() {
+        return None;
+    }
+
+    let value = String::from_utf8(output.stdout).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 fn select_in_skim(projects: Vec<Project>) -> Result<String, Box<dyn Error>> {
     let options = SkimOptionsBuilder::default()
         .height(Some("100%"))
@@ -330,13 +355,16 @@ mod tests {
 
     #[test]
     fn build_projects_always_includes_ssh_item() {
-        let projects =
-            build_projects(vec![], vec![], DEFAULT_SSH_SESSION_NAME).expect("build should succeed");
+        let projects = build_projects(vec![], vec![], DEFAULT_SSH_SESSION_NAME, None)
+            .expect("build should succeed");
 
-        assert_eq!(projects[0].folder, DEFAULT_SSH_SESSION_NAME);
         assert_eq!(count_by_name(&projects, DEFAULT_SSH_SESSION_NAME), 1);
-        assert!(!projects[0].session_exists);
-        assert!(projects[0].is_ssh_session);
+        let ssh = projects
+            .iter()
+            .find(|p| p.folder == DEFAULT_SSH_SESSION_NAME)
+            .expect("ssh item should exist");
+        assert!(!ssh.session_exists);
+        assert!(ssh.is_ssh_session);
     }
 
     #[test]
@@ -345,6 +373,7 @@ mod tests {
             vec![],
             vec![DEFAULT_SSH_SESSION_NAME.to_string(), "work".to_string()],
             DEFAULT_SSH_SESSION_NAME,
+            None,
         )
         .expect("build should succeed");
 
@@ -373,7 +402,7 @@ mod tests {
             ("repo1".to_string(), "/tmp/repo1".to_string()),
         ];
 
-        let projects = build_projects(folders, vec![], DEFAULT_SSH_SESSION_NAME)
+        let projects = build_projects(folders, vec![], DEFAULT_SSH_SESSION_NAME, None)
             .expect("build should succeed");
 
         assert_eq!(count_by_name(&projects, DEFAULT_SSH_SESSION_NAME), 1);
@@ -385,7 +414,7 @@ mod tests {
         let folders = vec![("repo1".to_string(), "/tmp/repo1".to_string())];
         let sessions = vec!["repo1".to_string()];
 
-        let projects = build_projects(folders, sessions, DEFAULT_SSH_SESSION_NAME)
+        let projects = build_projects(folders, sessions, DEFAULT_SSH_SESSION_NAME, None)
             .expect("build should succeed");
 
         assert_eq!(count_by_name(&projects, "repo1"), 1);
@@ -395,6 +424,30 @@ mod tests {
             .expect("repo1 should exist");
         assert!(repo.session_exists);
         assert!(!repo.is_ssh_session);
+    }
+
+    #[test]
+    fn build_projects_prioritizes_current_active_session() {
+        let folders = vec![("repo1".to_string(), "/tmp/repo1".to_string())];
+        let sessions = vec!["work".to_string(), DEFAULT_SSH_SESSION_NAME.to_string()];
+
+        let projects = build_projects(folders, sessions, DEFAULT_SSH_SESSION_NAME, Some("work"))
+            .expect("build should succeed");
+
+        assert_eq!(projects[0].folder, "work");
+    }
+
+    #[test]
+    fn build_projects_prioritizes_ssh_when_it_is_current_session() {
+        let projects = build_projects(
+            vec![],
+            vec![DEFAULT_SSH_SESSION_NAME.to_string(), "work".to_string()],
+            DEFAULT_SSH_SESSION_NAME,
+            Some(DEFAULT_SSH_SESSION_NAME),
+        )
+        .expect("build should succeed");
+
+        assert_eq!(projects[0].folder, DEFAULT_SSH_SESSION_NAME);
     }
 
     #[test]
