@@ -21,6 +21,9 @@
 
 ```
 finter/
+├── .github/
+│   └── workflows/
+│       └── publish.yml  # Auto-publish to crates.io on version change
 ├── src/
 │   ├── main.rs          # CLI argument parsing (clap)
 │   └── lib.rs           # Core logic (session management, tmux commands)
@@ -191,8 +194,45 @@ bind C-o display-popup -E "finter"
 5. ✓ Run `cargo build` to verify compilation
 6. ✓ Update version in `Cargo.toml` (semantic versioning)
 7. ✓ Update README.md if user-facing behavior changes
+8. ✓ Commit and push - GitHub Actions will auto-publish to crates.io
 
 **Version bumping strategy:**
 - **Patch (0.2.x):** Bug fixes, internal refactoring
 - **Minor (0.x.0):** New features, behavior changes
 - **Major (x.0.0):** Breaking changes, API redesign
+
+## CI/CD - Automated Publishing
+
+**Workflow:** `.github/workflows/publish.yml`
+
+**Trigger:** Automatically runs when `Cargo.toml` is pushed to `main`/`master` branch
+
+**Process:**
+1. Checkout code
+2. Setup Rust toolchain
+3. Run `cargo test` (validation)
+4. Check if version is already published on crates.io
+5. If new version: publish to crates.io
+6. If same version: skip (idempotent)
+
+**Publishing workflow:**
+```bash
+# 1. Update version in Cargo.toml (e.g., 0.2.0 → 0.3.0)
+# 2. Commit and push
+git add Cargo.toml
+git commit -m "chore: bump version to 0.3.0"
+git push
+
+# 3. GitHub Actions automatically publishes to crates.io
+# No manual intervention needed!
+```
+
+**Requirements:**
+- GitHub repository secret `CARGO_REGISTRY_TOKEN` must be set
+- Token obtained from https://crates.io/settings/tokens
+
+**What it prevents:**
+- ✓ Publishing without tests passing
+- ✓ Re-publishing the same version (checks crates.io first)
+- ✓ Manual `cargo publish` commands
+- ✓ Forgetting to publish after version bump
