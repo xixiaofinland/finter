@@ -92,6 +92,28 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
         run_tmux_with_args(&["new-session", "-ds", &session_name, "-c", &path]);
 
         if selected_project.is_ssh_session {
+            run_tmux_with_args(&[
+                "new-window",
+                "-t",
+                &format!("{session_name}:2"),
+                "-c",
+                &path,
+            ]);
+            run_tmux_with_args(&[
+                "new-window",
+                "-t",
+                &format!("{session_name}:3"),
+                "-c",
+                &path,
+            ]);
+            run_tmux_with_args(&[
+                "new-window",
+                "-t",
+                &format!("{session_name}:4"),
+                "-c",
+                &path,
+            ]);
+
             let ssh_connect_cmd = build_ssh_connect_cmd(&config.ssh);
             run_tmux_with_args(&[
                 "send-keys",
@@ -100,6 +122,8 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
                 &ssh_connect_cmd,
                 "C-m",
             ]);
+
+            run_tmux_with_args(&["select-window", "-t", &format!("{session_name}:2")]);
         } else {
             run_tmux_with_args(&[
                 "new-window",
@@ -108,7 +132,21 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
                 "-c",
                 &path,
             ]);
-            run_tmux_with_args(&["select-window", "-t", &format!("{session_name}:1")]);
+            run_tmux_with_args(&[
+                "new-window",
+                "-t",
+                &format!("{session_name}:3"),
+                "-c",
+                &path,
+            ]);
+            run_tmux_with_args(&[
+                "new-window",
+                "-t",
+                &format!("{session_name}:4"),
+                "-c",
+                &path,
+            ]);
+            run_tmux_with_args(&["select-window", "-t", &format!("{session_name}:2")]);
         }
     }
 
