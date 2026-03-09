@@ -5,6 +5,9 @@ version = "0.2.1"
 edition = "2021"
 description = "A Tmux plugin to quickly create session for folders in configured paths."
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/xixiaofinland/finter"
+homepage = "https://github.com/xixiaofinland/finter"
+documentation = "https://docs.rs/finter"
 
 [dependencies]
 skim = "0.10.4"

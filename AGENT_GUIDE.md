@@ -191,10 +191,11 @@ bind C-o display-popup -E "finter"
 2. ✓ Update relevant `docs/*.md` files
 3. ✓ Add/update tests if logic changes
 4. ✓ Run `cargo test` to verify
-5. ✓ Run `cargo build` to verify compilation
-6. ✓ Update version in `Cargo.toml` (semantic versioning)
-7. ✓ Update README.md if user-facing behavior changes
-8. ✓ Commit and push - GitHub Actions will auto-publish to crates.io
+5. ✓ Update version in `Cargo.toml` (semantic versioning)
+6. ✓ Run `cargo build` to update `Cargo.lock`
+7. ✓ Commit `Cargo.toml` AND `Cargo.lock` together
+8. ✓ Update README.md if user-facing behavior changes
+9. ✓ Push - GitHub Actions will auto-publish to crates.io
 
 **Version bumping strategy:**
 - **Patch (0.2.x):** Bug fixes, internal refactoring
@@ -217,15 +218,35 @@ bind C-o display-popup -E "finter"
 
 **Publishing workflow:**
 ```bash
-# 1. Update version in Cargo.toml (e.g., 0.2.0 → 0.3.0)
-# 2. Commit and push
-git add Cargo.toml
+# Standard version bump workflow:
+
+# 1. Make your code changes
+vim src/lib.rs
+
+# 2. Run tests to verify
+cargo test
+
+# 3. Update version in Cargo.toml (e.g., 0.2.0 → 0.3.0)
+vim Cargo.toml
+
+# 4. Rebuild to update Cargo.lock
+cargo build
+
+# 5. Commit BOTH Cargo.toml and Cargo.lock together
+git add Cargo.toml Cargo.lock
 git commit -m "chore: bump version to 0.3.0"
+
+# 6. Push to trigger GitHub Actions
 git push
 
-# 3. GitHub Actions automatically publishes to crates.io
+# 7. GitHub Actions automatically publishes to crates.io
 # No manual intervention needed!
 ```
+
+**⚠️ IMPORTANT:** Always commit `Cargo.lock` with `Cargo.toml` version changes!
+- `cargo publish` requires a clean git working directory
+- Running `cargo build` after version change updates `Cargo.lock`
+- Both files must be committed together to avoid CI/CD failures
 
 **Requirements:**
 - GitHub repository secret `CARGO_REGISTRY_TOKEN` must be set
