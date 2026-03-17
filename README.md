@@ -39,8 +39,8 @@ bind C-o display-popup -E "finter"
 - Uses a popup-compatible fuzzy selector (`skim`).
 - On select:
   - existing session: switch/attach to it
-  - missing project session: create detached session in folder, create a second window, then switch/attach
-  - missing SSH session: create one window and auto-run SSH, then switch/attach
+  - missing project session: create detached session in folder, create a second window, stay on window 1, then switch/attach
+  - missing SSH session: create one window, auto-run SSH, then switch/attach
 
 Default `~/.finter.toml` (created by `finter -d ...`):
 

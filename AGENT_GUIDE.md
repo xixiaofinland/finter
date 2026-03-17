@@ -14,8 +14,8 @@
 2. Lists child folders + existing tmux sessions in a fuzzy picker
 3. On selection:
    - **Existing session:** switches/attaches to it
-   - **New project session:** creates 4 windows in project directory, defaults to window 2
-   - **New SSH session:** creates 4 windows in home directory, auto-runs SSH in window 1, defaults to window 2
+   - **New project session:** creates 2 windows in project directory and stays on window 1
+   - **New SSH session:** creates 1 window in home directory and auto-runs SSH in it
 
 ## Repository Structure
 
@@ -58,21 +58,15 @@ Key functions to understand:
 ```rust
 1. tmux new-session -ds <name> -c <path>      # window 1
 2. tmux new-window -t <name>:2 -c <path>      # window 2
-3. tmux new-window -t <name>:3 -c <path>      # window 3
-4. tmux new-window -t <name>:4 -c <path>      # window 4
-5. tmux select-window -t <name>:2             # default to window 2
-6. tmux switch-client -t <name>
+3. tmux select-window -t <name>:1             # keep window 1 active
+4. tmux switch-client -t <name>
 ```
 
 **SSH sessions (when `is_ssh_session == true`):**
 ```rust
 1. tmux new-session -ds <name> -c <home>      # window 1
-2. tmux new-window -t <name>:2 -c <home>      # window 2
-3. tmux new-window -t <name>:3 -c <home>      # window 3
-4. tmux new-window -t <name>:4 -c <home>      # window 4
-5. tmux send-keys -t <name>:1 "ssh ..." C-m   # auto-run SSH in window 1
-6. tmux select-window -t <name>:2             # default to window 2
-7. tmux switch-client -t <name>
+2. tmux send-keys -t <name>:1 "ssh ..." C-m   # auto-run SSH in window 1
+3. tmux switch-client -t <name>
 ```
 
 ## Configuration
@@ -117,8 +111,8 @@ cargo run -- -d /path1 /path2  # Update config
 
 **Changed from v0.1.19:**
 - **Before:** 2 windows created, default to window 1
-- **After:** 4 windows created, default to window 2
-- **Applies to:** Both project and SSH sessions
+- **After:** project sessions create 2 windows and stay on window 1; SSH session stays on 1 window
+- **Applies to:** Project sessions and SSH session creation paths separately
 - **Files modified:** `src/lib.rs:91-113`, `docs/behavior.md:47-66`
 
 ## Common Modification Patterns

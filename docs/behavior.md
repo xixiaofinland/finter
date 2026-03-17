@@ -48,20 +48,14 @@ When selecting a folder with no existing session:
 
 1. `tmux new-session -ds <name> -c <path>` (creates window 1)
 2. `tmux new-window -t <name>:2 -c <path>` (creates window 2)
-3. `tmux new-window -t <name>:3 -c <path>` (creates window 3)
-4. `tmux new-window -t <name>:4 -c <path>` (creates window 4)
-5. `tmux select-window -t <name>:2` (selects window 2)
-6. switch/attach client
+3. `tmux select-window -t <name>:1` (keeps window 1 active)
+4. switch/attach client
 
 When selecting configured SSH session with no existing session:
 
 1. `tmux new-session -ds <ssh.session_name> -c <home>` (creates window 1)
-2. `tmux new-window -t <ssh.session_name>:2 -c <home>` (creates window 2)
-3. `tmux new-window -t <ssh.session_name>:3 -c <home>` (creates window 3)
-4. `tmux new-window -t <ssh.session_name>:4 -c <home>` (creates window 4)
-5. `tmux send-keys -t <ssh.session_name>:1 "<ssh connect command>" C-m` (runs SSH in window 1)
-6. `tmux select-window -t <ssh.session_name>:2` (selects window 2)
-7. switch/attach client
+2. `tmux send-keys -t <ssh.session_name>:1 "<ssh connect command>" C-m` (runs SSH in window 1)
+3. switch/attach client
 
 If configured SSH session already exists, `finter` only switches/attaches and does not send additional commands.
 
