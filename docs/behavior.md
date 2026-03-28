@@ -61,8 +61,10 @@ If configured SSH session already exists, `finter` only switches/attaches and do
 
 `<ssh connect command>` is:
 
-- `ssh <ssh.primary>`
-- with `ssh.tailscale` set: `if nc -z -w2 192.168.1.200 22; then ssh <ssh.primary>; else ssh <ssh.tailscale>; fi`
+- `ssh -t <ssh.primary> 'tmux new-session -A -s <ssh.remote_session_name>'`
+- with `ssh.tailscale` set: `if nc -z -w2 192.168.1.200 22; then ssh -t <ssh.primary> 'tmux new-session -A -s <ssh.remote_session_name>'; else ssh -t <ssh.tailscale> 'tmux new-session -A -s <ssh.remote_session_name>'; fi`
+- `ssh.remote_session_name` defaults to `mac_mini`
+- if `ssh.remote_session_name` is blank, `finter` sends plain SSH without the remote tmux wrapper
 
 ## Known Caveats
 

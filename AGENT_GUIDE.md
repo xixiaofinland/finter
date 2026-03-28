@@ -65,7 +65,7 @@ Key functions to understand:
 **SSH sessions (when `is_ssh_session == true`):**
 ```rust
 1. tmux new-session -ds <name> -c <home>      # window 1
-2. tmux send-keys -t <name>:1 "ssh ..." C-m   # auto-run SSH in window 1
+2. tmux send-keys -t <name>:1 "ssh -t ... 'tmux new-session -A -s mac_mini'" C-m
 3. tmux switch-client -t <name>
 ```
 
@@ -83,6 +83,7 @@ roots = [
 [ssh]
 session_name = "ssh_mac_mini"
 primary = "user@192.168.1.200"
+remote_session_name = "mac_mini"
 # Optional Tailscale fallback
 # tailscale = "user@macmini.tailnet.ts.net"
 ```
@@ -92,7 +93,7 @@ primary = "user@192.168.1.200"
 ### Build & Test
 ```bash
 cargo build          # Compile
-cargo test           # Run 10 unit tests
+cargo test           # Run 12 unit tests
 cargo run -- -d /path1 /path2  # Update config
 ```
 
@@ -107,13 +108,13 @@ cargo run -- -d /path1 /path2  # Update config
 - Existing sessions shown with `*` prefix in picker
 - SSH session always included in picker regardless of existence
 
-## Recent Changes (v0.2.0)
+## Recent Changes (v0.3.0)
 
-**Changed from v0.1.19:**
-- **Before:** 2 windows created, default to window 1
-- **After:** project sessions create 2 windows and stay on window 1; SSH session stays on 1 window
-- **Applies to:** Project sessions and SSH session creation paths separately
-- **Files modified:** `src/lib.rs:91-113`, `docs/behavior.md:47-66`
+**Changed from v0.2.2:**
+- **Before:** SSH session opened a plain remote shell
+- **After:** SSH session attaches to or creates remote tmux session `mac_mini`
+- **Applies to:** SSH session creation path and SSH config parsing
+- **Files modified:** `src/lib.rs`, `docs/behavior.md`, `docs/usage.md`
 
 ## Common Modification Patterns
 
@@ -133,7 +134,7 @@ See `get_folders()` function (line 223) - currently replaces `.` and `:` with `_
 
 ## Testing Strategy
 
-**Unit tests:** 10 tests in `src/lib.rs:340-507`
+**Unit tests:** 12 tests in `src/lib.rs`
 - Focus on `build_projects()` logic
 - SSH session handling
 - Config parsing

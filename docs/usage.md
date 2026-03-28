@@ -28,6 +28,7 @@ roots = [
 [ssh]
 session_name = "ssh_mac_mini"
 primary = "user@192.168.1.200"
+remote_session_name = "mac_mini"
 # optional tailscale fallback
 # tailscale = "user@macmini.tailnet.ts.net"
 ```
@@ -63,7 +64,7 @@ Configured SSH session behavior:
 - If session does not exist, `finter` creates a one-window session and sends:
 
 ```bash
-ssh <ssh.primary>
+ssh -t <ssh.primary> 'tmux new-session -A -s <ssh.remote_session_name>'
 ```
 
 - Optional Tailscale fallback in TOML:
@@ -74,6 +75,8 @@ tailscale = "user@macmini.tailnet.ts.net"
 ```
 
 When `ssh.tailscale` is set, `finter` sends a command that tries LAN first and falls back to this target only if `192.168.1.200:22` is unreachable.
+- `ssh.remote_session_name` defaults to `mac_mini`.
+- Set `ssh.remote_session_name = ""` to disable remote tmux attach/create and use plain SSH instead.
 
 ## Typical Tmux Workflow
 

@@ -42,6 +42,7 @@ roots = ["/home/username/projects"]
 [ssh]
 session_name = "ssh_mac_mini"
 primary = "user@192.168.1.200"
+remote_session_name = "mac_mini"
 ```
 
 ## `Err: no folder is found in the configured paths.`
@@ -88,6 +89,21 @@ tailscale = "user@macmini.tailnet.ts.net"
 ```
 
 - Restart tmux server if the popup still uses stale config/environment.
+
+## SSH connects but does not enter remote tmux
+
+Cause:
+
+- `ssh.remote_session_name` is blank in `~/.finter.toml`.
+
+Fix:
+
+- Set the remote tmux session explicitly, for example:
+
+```toml
+[ssh]
+remote_session_name = "mac_mini"
+```
 
 ## Canceled picker
 

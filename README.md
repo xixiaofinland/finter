@@ -40,7 +40,7 @@ bind C-o display-popup -E "finter"
 - On select:
   - existing session: switch/attach to it
   - missing project session: create detached session in folder, create a second window, stay on window 1, then switch/attach
-  - missing SSH session: create one window, auto-run SSH, then switch/attach
+  - missing SSH session: create one window, auto-run SSH into the remote `mac_mini` tmux session, then switch/attach
 
 Default `~/.finter.toml` (created by `finter -d ...`):
 
@@ -53,6 +53,7 @@ roots = [
 [ssh]
 session_name = "ssh_mac_mini"
 primary = "user@192.168.1.200"
+remote_session_name = "mac_mini"
 ```
 
 You can also copy the repo template: `.finter.toml.example`.
@@ -60,8 +61,10 @@ You can also copy the repo template: `.finter.toml.example`.
 SSH details:
 
 - Connect command is built from `ssh.primary`.
+- By default, `finter` runs remote `tmux new-session -A -s mac_mini` over SSH so it attaches to that session or creates it if missing.
 - Optional fallback is `ssh.tailscale` in TOML (for example `user@macmini.tailnet.ts.net`).
 - When `ssh.tailscale` is set, `finter` tries LAN first and falls back only if LAN SSH is unreachable.
+- Set `ssh.remote_session_name = ""` to disable the remote tmux wrapper and use plain SSH instead.
 - Legacy `~/.finter` path-list config is no longer read.
 
 ## Docs

@@ -6,6 +6,7 @@ pub type MyResult<T> = Result<T, Box<dyn Error>>;
 
 const DEFAULT_SSH_SESSION_NAME: &str = "ssh_mac_mini";
 const DEFAULT_SSH_PRIMARY_TARGET: &str = "xixiao@192.168.1.200";
+const DEFAULT_SSH_REMOTE_SESSION_NAME: &str = "mac_mini";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Config {
@@ -18,6 +19,8 @@ struct SshConfig {
     session_name: String,
     primary: String,
     tailscale: Option<String>,
+    #[serde(default = "default_ssh_remote_session_name")]
+    remote_session_name: Option<String>,
 }
 
 impl Default for SshConfig {
@@ -26,6 +29,7 @@ impl Default for SshConfig {
             session_name: DEFAULT_SSH_SESSION_NAME.to_string(),
             primary: DEFAULT_SSH_PRIMARY_TARGET.to_string(),
             tailscale: None,
+            remote_session_name: Some(DEFAULT_SSH_REMOTE_SESSION_NAME.to_string()),
         }
     }
 }
@@ -317,13 +321,35 @@ fn run_tmux_with_args(args: &[&str]) -> process::Output {
 }
 
 fn build_ssh_connect_cmd(ssh: &SshConfig) -> String {
-    let primary_cmd = format!("ssh {}", ssh.primary);
+    let primary_cmd = build_ssh_target_cmd(&ssh.primary, ssh.remote_session_name.as_deref());
     match ssh.tailscale.as_deref() {
         Some(target) if !target.trim().is_empty() => {
-            format!("if nc -z -w2 192.168.1.200 22; then {primary_cmd}; else ssh {target}; fi")
+            let tailscale_cmd = build_ssh_target_cmd(target, ssh.remote_session_name.as_deref());
+            format!("if nc -z -w2 192.168.1.200 22; then {primary_cmd}; else {tailscale_cmd}; fi")
         }
         _ => primary_cmd,
     }
+}
+
+fn build_ssh_target_cmd(target: &str, remote_session_name: Option<&str>) -> String {
+    match remote_session_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        Some(name) => {
+            let remote_tmux_cmd = format!("tmux new-session -A -s {}", shell_quote(name));
+            format!("ssh -t {} {}", target, shell_quote(&remote_tmux_cmd))
+        }
+        None => format!("ssh {}", target),
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn default_ssh_remote_session_name() -> Option<String> {
+    Some(DEFAULT_SSH_REMOTE_SESSION_NAME.to_string())
 }
 
 fn get_home_dir() -> String {
@@ -346,6 +372,7 @@ mod tests {
             session_name: DEFAULT_SSH_SESSION_NAME.to_string(),
             primary: DEFAULT_SSH_PRIMARY_TARGET.to_string(),
             tailscale: None,
+            remote_session_name: Some(DEFAULT_SSH_REMOTE_SESSION_NAME.to_string()),
         }
     }
 
@@ -453,7 +480,10 @@ mod tests {
     #[test]
     fn build_ssh_connect_cmd_without_tailscale_target_uses_primary() {
         let ssh = default_ssh();
-        assert_eq!(build_ssh_connect_cmd(&ssh), "ssh xixiao@192.168.1.200");
+        assert_eq!(
+            build_ssh_connect_cmd(&ssh),
+            "ssh -t xixiao@192.168.1.200 'tmux new-session -A -s '\"'\"'mac_mini'\"'\"''"
+        );
 
         let ssh_blank = SshConfig {
             tailscale: Some("   ".to_string()),
@@ -461,7 +491,7 @@ mod tests {
         };
         assert_eq!(
             build_ssh_connect_cmd(&ssh_blank),
-            "ssh xixiao@192.168.1.200"
+            "ssh -t xixiao@192.168.1.200 'tmux new-session -A -s '\"'\"'mac_mini'\"'\"''"
         );
     }
 
@@ -474,8 +504,31 @@ mod tests {
         let command = build_ssh_connect_cmd(&ssh);
 
         assert!(command.contains("nc -z -w2 192.168.1.200 22"));
+        assert!(command.contains("ssh -t xixiao@192.168.1.200"));
+        assert!(command.contains("ssh -t xixiao@macmini.example.ts.net"));
+        assert!(command.contains("tmux new-session -A -s "));
+        assert!(command.contains("mac_mini"));
+    }
+
+    #[test]
+    fn build_ssh_connect_cmd_without_remote_session_name_uses_plain_ssh() {
+        let ssh = SshConfig {
+            remote_session_name: None,
+            ..default_ssh()
+        };
+
+        assert_eq!(build_ssh_connect_cmd(&ssh), "ssh xixiao@192.168.1.200");
+
+        let ssh_blank = SshConfig {
+            remote_session_name: Some("   ".to_string()),
+            tailscale: Some("xixiao@macmini.example.ts.net".to_string()),
+            ..default_ssh()
+        };
+
+        let command = build_ssh_connect_cmd(&ssh_blank);
         assert!(command.contains("ssh xixiao@192.168.1.200"));
         assert!(command.contains("ssh xixiao@macmini.example.ts.net"));
+        assert!(!command.contains("ssh -t"));
     }
 
     #[test]
@@ -493,6 +546,7 @@ roots = ["/work/a", "/work/b"]
 session_name = "ssh_mac_mini"
 primary = "xixiao@192.168.1.200"
 tailscale = "xixiao@macmini.tailnet.ts.net"
+remote_session_name = "mac_mini"
 "#;
 
         let cfg = parse_config(content).expect("config should parse");
@@ -503,5 +557,20 @@ tailscale = "xixiao@macmini.tailnet.ts.net"
             cfg.ssh.tailscale,
             Some("xixiao@macmini.tailnet.ts.net".to_string())
         );
+        assert_eq!(cfg.ssh.remote_session_name, Some("mac_mini".to_string()));
+    }
+
+    #[test]
+    fn parse_config_defaults_remote_session_name_when_missing() {
+        let content = r#"
+roots = ["/work/a"]
+
+[ssh]
+session_name = "ssh_mac_mini"
+primary = "xixiao@192.168.1.200"
+"#;
+
+        let cfg = parse_config(content).expect("config should parse");
+        assert_eq!(cfg.ssh.remote_session_name, Some("mac_mini".to_string()));
     }
 }
