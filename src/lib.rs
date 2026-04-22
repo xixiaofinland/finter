@@ -771,14 +771,14 @@ mode = "children"
     fn load_project_paths_handles_direct_mode() {
         let content = r#"
 [[roots_config]]
-path = "/home/finxxi/notes"
+path = "/tmp"
 mode = "direct"
 "#;
 
         let cfg: Config = toml::from_str(content).expect("config should parse");
         let paths = load_project_paths(&cfg).expect("paths should load");
         assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0].0, "/home/finxxi/notes");
+        assert_eq!(paths[0].0, "/tmp");
         assert_eq!(paths[0].1, RootMode::Direct);
     }
 
