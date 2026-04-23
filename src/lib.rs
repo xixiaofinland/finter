@@ -118,9 +118,15 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
     if !selected_project.session_exists {
         run_tmux_with_args(&["new-session", "-ds", &session_name, "-c", &path]);
 
-        if let Some(ssh) = &config.ssh {
-            if selected_project.is_ssh_session {
+        if selected_project.is_ssh_session {
+            if let Some(ssh) = &config.ssh {
                 let ssh_connect_cmd = build_ssh_connect_cmd(ssh);
+                run_tmux_with_args(&[
+                    "rename-window",
+                    "-t",
+                    &format!("{session_name}:1"),
+                    "Mac-mini",
+                ]);
                 run_tmux_with_args(&[
                     "send-keys",
                     "-t",
@@ -128,16 +134,16 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
                     &ssh_connect_cmd,
                     "C-m",
                 ]);
-            } else {
-                run_tmux_with_args(&[
-                    "new-window",
-                    "-t",
-                    &format!("{session_name}:2"),
-                    "-c",
-                    &path,
-                ]);
-                run_tmux_with_args(&["select-window", "-t", &format!("{session_name}:1")]);
             }
+        } else {
+            run_tmux_with_args(&[
+                "new-window",
+                "-t",
+                &format!("{session_name}:2"),
+                "-c",
+                &path,
+            ]);
+            run_tmux_with_args(&["select-window", "-t", &format!("{session_name}:1")]);
         }
     }
 
@@ -478,8 +484,7 @@ mod tests {
 
     #[test]
     fn build_projects_no_ssh_when_not_configured() {
-        let projects = build_projects(vec![], vec![], None, None)
-            .expect("build should succeed");
+        let projects = build_projects(vec![], vec![], None, None).expect("build should succeed");
 
         assert!(!projects.iter().any(|p| p.folder == "ssh_mac_mini"));
         assert!(!projects.iter().any(|p| p.is_ssh_session));
@@ -493,7 +498,7 @@ mod tests {
             Some("ssh_mac_mini"),
             None,
         )
-            .expect("build should succeed");
+        .expect("build should succeed");
 
         let ssh = projects
             .iter()
@@ -560,7 +565,7 @@ mod tests {
             Some("ssh_mac_mini"),
             Some("ssh_mac_mini"),
         )
-            .expect("build should succeed");
+        .expect("build should succeed");
 
         assert_eq!(projects[0].folder, "ssh_mac_mini");
     }
