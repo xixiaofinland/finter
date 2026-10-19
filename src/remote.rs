@@ -142,13 +142,32 @@ pub(crate) fn merge_fetch(
     }
 }
 
-/// `$XDG_RUNTIME_DIR/finter`, or `<tmp>/finter` when the variable is unset.
+/// Per-user fallback owner id: the owner of the home directory.
+fn user_tag() -> String {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(crate::config::get_home_dir())
+        .map(|m| m.uid().to_string())
+        .unwrap_or_else(|_| "user".to_string())
+}
+
+/// `$XDG_RUNTIME_DIR/finter`, or `<tmp>/finter-<uid>` when the variable is unset.
 pub(crate) fn runtime_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("finter")
+    match std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
+        Some(base) => PathBuf::from(base).join("finter"),
+        None => std::env::temp_dir().join(format!("finter-{}", user_tag())),
+    }
+}
+
+/// Create the runtime dir with mode 0700 (it can hold session names and messages).
+pub(crate) fn ensure_runtime_dir() -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let dir = runtime_dir();
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)?;
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+    Ok(dir)
 }
 
 fn cache_path(host: &str) -> PathBuf {
@@ -160,13 +179,12 @@ pub(crate) fn read_cache(host: &str) -> Option<HostCache> {
 }
 
 pub(crate) fn write_cache(host: &str, cache: &HostCache) {
-    let dir = runtime_dir();
     let Ok(json) = serde_json::to_string(cache) else {
         return;
     };
-    if fs::create_dir_all(&dir).is_err() {
+    let Ok(dir) = ensure_runtime_dir() else {
         return;
-    }
+    };
     // Write-then-rename so a concurrent reader never sees half a file.
     let tmp = dir.join(format!("{host}.json.{}", std::process::id()));
     if fs::write(&tmp, json).is_ok() {
@@ -322,11 +340,17 @@ pub(crate) fn find_project_path<'a>(
         .map(|(_, p)| p.as_str())
 }
 
+/// Write `inner.conf` unless it already matches; windows 1 and 2 attach at the same
+/// time, and a plain truncate+write would let one tmux read a half-written file.
 fn write_inner_conf() -> Result<PathBuf, Box<dyn Error>> {
-    let dir = runtime_dir();
-    fs::create_dir_all(&dir)?;
+    let dir = ensure_runtime_dir()?;
     let path = dir.join("inner.conf");
-    fs::write(&path, INNER_CONF)?;
+    if fs::read_to_string(&path).is_ok_and(|c| c == INNER_CONF) {
+        return Ok(path);
+    }
+    let tmp = dir.join(format!("inner.conf.{}", std::process::id()));
+    fs::write(&tmp, INNER_CONF)?;
+    fs::rename(&tmp, &path)?;
     Ok(path)
 }
 
@@ -425,6 +449,10 @@ pub(crate) fn create_wrapper(host: &HostConfig, project: &str) -> bool {
 mod tests {
     use super::*;
     use crate::state::test_entry;
+    use std::sync::Mutex;
+
+    // Tests that touch XDG_RUNTIME_DIR must not run concurrently.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn sample_list() -> ListOutput {
         let folders = vec![
@@ -494,6 +522,7 @@ mod tests {
 
     #[test]
     fn load_host_uses_cache_until_stale_then_fetches() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("finter-rt-{}", std::process::id()));
         // Safe: only this test touches XDG_RUNTIME_DIR.
         std::env::set_var("XDG_RUNTIME_DIR", &dir);
@@ -520,6 +549,29 @@ mod tests {
         assert!(third.offline);
         assert_eq!(third.entries().len(), 1, "stale data survives offline");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fallback_runtime_dir_is_private_and_per_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("finter-xdg-{}", std::process::id()));
+        std::env::set_var("XDG_RUNTIME_DIR", &base);
+        let dir = ensure_runtime_dir().unwrap();
+        assert_eq!(dir, base.join("finter"));
+        assert_eq!(
+            fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        // inner.conf is written once and left alone when it already matches.
+        let conf = write_inner_conf().unwrap();
+        assert_eq!(fs::read_to_string(&conf).unwrap(), INNER_CONF);
+        assert_eq!(write_inner_conf().unwrap(), conf);
+        let _ = fs::remove_dir_all(&base);
+        std::env::remove_var("XDG_RUNTIME_DIR");
+        let fallback = runtime_dir();
+        assert!(fallback.starts_with(std::env::temp_dir()));
+        assert!(fallback.to_string_lossy().contains("finter-"));
     }
 
     #[test]
