@@ -17,6 +17,8 @@ use std::{
 pub(crate) const LIST_VERSION: u32 = 1;
 /// A cache entry older than this is refreshed.
 pub(crate) const CACHE_TTL_SECS: u64 = 4;
+/// Offline hosts are retried less often so a dead host does not stall every refresh.
+pub(crate) const OFFLINE_TTL_SECS: u64 = 30;
 /// Hard stop for one ssh call; ConnectTimeout alone does not bound a hung session.
 const SSH_DEADLINE: Duration = Duration::from_secs(6);
 
@@ -119,7 +121,12 @@ pub(crate) struct HostCache {
 }
 
 pub(crate) fn is_stale(cache: &HostCache, now: u64) -> bool {
-    now.saturating_sub(cache.fetched_at) >= CACHE_TTL_SECS
+    let ttl = if cache.offline {
+        OFFLINE_TTL_SECS
+    } else {
+        CACHE_TTL_SECS
+    };
+    now.saturating_sub(cache.fetched_at) >= ttl
 }
 
 /// Fold a fetch result into the previous cache: failure keeps old data but flags offline.
@@ -200,6 +207,10 @@ fn ssh_args(alias: &str, remote_cmd: &str) -> Vec<String> {
         "ConnectTimeout=2",
         "-o",
         "BatchMode=yes",
+        "-o",
+        "ServerAliveInterval=2",
+        "-o",
+        "ServerAliveCountMax=1",
         alias,
         remote_cmd,
     ]
@@ -282,15 +293,22 @@ impl HostState {
 }
 
 /// Load a host's state, refreshing the cache through `fetch` when it is stale
-/// (or missing). `fetch` is the test seam for ssh.
+/// (or missing). With `refresh` false the cache is used as is, however old, and
+/// nothing blocks. `fetch` is the test seam for ssh.
 pub(crate) fn load_host_with(
     host: &HostConfig,
     now: u64,
+    refresh: bool,
     fetch: &dyn Fn(&HostConfig) -> Result<ListOutput, String>,
 ) -> HostState {
     let cached = read_cache(&host.name);
     let cache = match cached {
-        Some(c) if !is_stale(&c, now) => c,
+        Some(c) if !refresh || !is_stale(&c, now) => c,
+        None if !refresh => HostCache {
+            fetched_at: 0,
+            offline: false,
+            data: None,
+        },
         prev => {
             let fresh = merge_fetch(prev, now, fetch(host));
             write_cache(&host.name, &fresh);
@@ -308,13 +326,13 @@ pub(crate) fn fetch_list(host: &HostConfig) -> Result<ListOutput, String> {
     parse_list_output(&ssh_run(&host.ssh, "finter list --json")?)
 }
 
-pub(crate) fn load_hosts(config: &Config, now: u64) -> Vec<HostState> {
+pub(crate) fn load_hosts(config: &Config, now: u64, refresh: bool) -> Vec<HostState> {
     // Hosts are independent, so refresh them in parallel.
     let handles: Vec<_> = config
         .hosts
         .iter()
         .cloned()
-        .map(|h| thread::spawn(move || load_host_with(&h, now, &fetch_list)))
+        .map(|h| thread::spawn(move || load_host_with(&h, now, refresh, &fetch_list)))
         .collect();
     handles.into_iter().filter_map(|h| h.join().ok()).collect()
 }
@@ -504,6 +522,9 @@ mod tests {
         assert!(!is_stale(&c, 103));
         assert!(is_stale(&c, 104));
         assert!(!is_stale(&c, 50));
+        let off = HostCache { offline: true, ..c };
+        assert!(!is_stale(&off, 120));
+        assert!(is_stale(&off, 130));
     }
 
     #[test]
@@ -539,15 +560,24 @@ mod tests {
             calls.set(calls.get() + 1);
             Err("down".to_string())
         };
-        let first = load_host_with(&host, 1000, &ok);
+        let first = load_host_with(&host, 1000, true, &ok);
         assert!(!first.offline);
-        let second = load_host_with(&host, 1002, &ok);
+        let second = load_host_with(&host, 1002, true, &ok);
         assert_eq!(calls.get(), 1, "fresh cache must not refetch");
         assert_eq!(second.entries().len(), 1);
-        let third = load_host_with(&host, 1010, &fail);
+        let third = load_host_with(&host, 1010, true, &fail);
         assert_eq!(calls.get(), 2);
         assert!(third.offline);
         assert_eq!(third.entries().len(), 1, "stale data survives offline");
+        // Offline caches are retried only after the longer TTL.
+        load_host_with(&host, 1020, true, &ok);
+        assert_eq!(calls.get(), 2);
+        let back = load_host_with(&host, 1041, true, &ok);
+        assert_eq!(calls.get(), 3);
+        assert!(!back.offline);
+        // Without refresh the cache is used even when stale, and ssh is never called.
+        load_host_with(&host, 9999, false, &fail);
+        assert_eq!(calls.get(), 3);
         let _ = fs::remove_dir_all(&dir);
     }
 

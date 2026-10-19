@@ -70,10 +70,10 @@ pub(crate) fn render_status(
 }
 
 /// Local agent panes plus every host's (cache-backed) panes.
-fn gather(config: Option<&Config>) -> (Vec<AgentEntry>, Vec<HostState>) {
+fn gather(config: Option<&Config>, refresh: bool) -> (Vec<AgentEntry>, Vec<HostState>) {
     let mut entries = tmux::list_agent_entries(Socket::Default, None);
     let hosts = config
-        .map(|c| remote::load_hosts(c, now_secs()))
+        .map(|c| remote::load_hosts(c, now_secs(), refresh))
         .unwrap_or_default();
     for h in &hosts {
         entries.extend(h.entries());
@@ -99,7 +99,7 @@ pub(crate) fn resolve_current(
 
 pub fn run_status(current_arg: Option<&str>) {
     let config = load_config_quiet();
-    let (entries, hosts) = gather(config.as_ref());
+    let (entries, hosts) = gather(config.as_ref(), true);
     let offline: Vec<String> = hosts
         .iter()
         .filter(|h| h.offline)
@@ -138,7 +138,8 @@ pub(crate) fn go_to_remote(host: &HostConfig, project: &str) -> bool {
 
 pub fn run_next() {
     let config = load_config_quiet();
-    let (entries, _) = gather(config.as_ref());
+    // `next` is a keypress: never wait on ssh, use whatever the status bar cached.
+    let (entries, _) = gather(config.as_ref(), false);
     let Some(entry) = pick_next(&entries) else {
         tmux::run_on(Socket::Default, &["display-message", "nothing waiting"]);
         return;

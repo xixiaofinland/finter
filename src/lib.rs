@@ -25,7 +25,7 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
     let now = status::now_secs();
 
     let local_agents = tmux::list_agent_entries(Socket::Default, None);
-    let hosts = remote::load_hosts(&config, now);
+    let hosts = remote::load_hosts(&config, now, true);
     let rows = build_rows(
         &folders,
         &sessions,
