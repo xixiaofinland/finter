@@ -112,16 +112,10 @@ fn wrapper_window(wrapper: &str, host: &HostConfig, entry: &AgentEntry) -> Strin
     found.unwrap_or_else(|| if entry.is_term() { "2" } else { "1" }.to_string())
 }
 
-fn session_exists(name: &str) -> bool {
-    tmux::run_on(Socket::Default, &["has-session", "-t", &format!("={name}")])
-        .status
-        .success()
-}
-
 /// Make sure the wrapper for a remote project exists, then switch to it.
 pub(crate) fn go_to_remote(host: &HostConfig, project: &str) -> bool {
     let wrapper = wrapper_session(&host.name, project);
-    if !session_exists(&wrapper) && !remote::create_wrapper(host, project) {
+    if !tmux::has_session(&wrapper) && !remote::create_wrapper(host, project) {
         return false;
     }
     tmux::run_on(Socket::Default, &["switch-client", "-t", &wrapper])

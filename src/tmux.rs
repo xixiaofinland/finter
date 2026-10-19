@@ -68,6 +68,13 @@ pub(crate) fn get_sessions_on(socket: Socket) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Exact-name session check on the default server.
+pub(crate) fn has_session(name: &str) -> bool {
+    run_on(Socket::Default, &["has-session", "-t", &format!("={name}")])
+        .status
+        .success()
+}
+
 pub(crate) fn get_sessions() -> Result<Vec<String>, Box<dyn Error>> {
     let out = run_tmux_with_args(&["list-sessions", "-F", "#S"]);
     Ok(String::from_utf8(out.stdout)?

@@ -36,7 +36,7 @@ impl RootConfig {
 }
 
 /// A remote machine whose finter sessions are listed and attached over ssh.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct HostConfig {
     /// Short label shown in the picker and used as local session prefix (`mini/X`).
     pub(crate) name: String,

@@ -1,6 +1,3 @@
-// TODO(finter-0.4): removed once every module is wired into the CLI.
-#![allow(dead_code)]
-
 mod config;
 mod hook;
 mod picker;
@@ -10,7 +7,7 @@ mod status;
 mod tmux;
 
 use config::{get_folders, load_config, load_project_paths};
-use picker::{build_projects, get_match, select_in_skim};
+use picker::{build_rows, get_match, select_in_skim, Target};
 use std::error::Error;
 use tmux::{get_current_session, get_sessions, run_tmux_with_args, Socket};
 
@@ -25,26 +22,39 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
     let folders = get_folders(paths)?;
     let sessions = get_sessions()?;
     let current_session = get_current_session();
+    let now = status::now_secs();
 
-    let projects = build_projects(folders, sessions, current_session.as_deref())?;
+    let local_agents = tmux::list_agent_entries(Socket::Default, None);
+    let hosts = remote::load_hosts(&config, now);
+    let rows = build_rows(
+        &folders,
+        &sessions,
+        &local_agents,
+        &hosts,
+        current_session.as_deref(),
+        now,
+    );
 
-    let selected = select_in_skim(projects.clone())?;
-    let selected_project = get_match(selected, projects)?;
+    let selected = select_in_skim(rows.clone())?;
+    let row = get_match(&selected, rows)?;
 
-    let session_name = selected_project.folder;
-    let path = selected_project.path;
-
-    if !selected_project.session_exists {
-        run_tmux_with_args(&["new-session", "-ds", &session_name, "-c", &path]);
-        run_tmux_with_args(&[
-            "new-window",
-            "-t",
-            &format!("{session_name}:2"),
-            "-c",
-            &path,
-        ]);
-        run_tmux_with_args(&["select-window", "-t", &format!("{session_name}:1")]);
-    }
+    let session_name = match row.target {
+        Target::Local { session, path } => {
+            if !row.exists {
+                run_tmux_with_args(&["new-session", "-ds", &session, "-c", &path]);
+                run_tmux_with_args(&["new-window", "-t", &format!("{session}:2"), "-c", &path]);
+                run_tmux_with_args(&["select-window", "-t", &format!("{session}:1")]);
+            }
+            session
+        }
+        Target::Remote { host, project } => {
+            let wrapper = state::wrapper_session(&host.name, &project);
+            if !tmux::has_session(&wrapper) && !remote::create_wrapper(&host, &project) {
+                return Err(format!("Err: could not create session `{wrapper}`").into());
+            }
+            wrapper
+        }
+    };
 
     let result = run_tmux_with_args(&["switch-client", "-t", &session_name]);
     if !result.status.success() {
