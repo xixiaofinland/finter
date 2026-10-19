@@ -51,7 +51,7 @@ Printed by `finter list --json` on each machine (inner server only):
 
 ## Remote Cache
 
-`ssh -o ConnectTimeout=2 -o BatchMode=yes <alias> finter list --json` is cached in `$XDG_RUNTIME_DIR/finter/<host>.json` (fallback: system temp dir) with a fetch timestamp. Entries older than 4 seconds are refreshed synchronously, bounded by a hard 6 second deadline. A failed refresh keeps the last data and sets the offline flag.
+`ssh -o ConnectTimeout=2 -o BatchMode=yes <alias> finter list --json` is cached in `$XDG_RUNTIME_DIR/finter/<host>.json` (fallback: system temp dir) with a fetch timestamp. Entries older than 4 seconds (30 seconds while the host is offline) are refreshed synchronously by `status` and the picker, bounded by a hard 6 second deadline; ssh also runs with `ServerAliveInterval=2 ServerAliveCountMax=1`. `finter next` never refreshes: it uses the cache as is. A failed refresh keeps the last data, sets the offline flag and stores a short reason (`unreachable`, `timed out`, `finter too old?`, `finter not found`), which `status` shows as `mini ✕ (reason)`. `list --json` is read from the last line that starts with `{`; schema versions >= 1 are accepted and panes with an unknown state are skipped.
 
 ## Session Naming Rules
 
@@ -93,5 +93,9 @@ Remote project without a local wrapper:
 ## Known Caveats
 
 - Folder-name collisions across roots can map to the same session name.
+- A project whose name ends in `~term` collides with the terminal session of the project without that suffix.
+- Project names containing backslashes are not supported by the remote attach quoting.
+- `inner.conf` is applied when the inner tmux server starts; changing it later needs a restart of that server (`tmux -L finter kill-server`) to take effect.
+- The runtime directory (`$XDG_RUNTIME_DIR/finter`, or `<tmp>/finter-<uid>`) is created with mode 0700.
 - Only immediate subdirectories are considered projects.
 - `Notification` means `asking`, except `notification_type: idle_prompt`, which is ignored so a finished turn stays `done`.

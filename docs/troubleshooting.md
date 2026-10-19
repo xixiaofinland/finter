@@ -82,6 +82,7 @@ Cause:
 Fix:
 
 - Run it by hand: `ssh -o BatchMode=yes <alias> finter list --json`.
+- The status bar shows a short reason: `unreachable`, `timed out`, `finter too old?` (remote finter lacks `list`), or `finter not found`.
 - Cached data from the last successful refresh is kept and marked offline; it is stored in `$XDG_RUNTIME_DIR/finter/<host>.json`.
 
 ## Remote window closes right away
