@@ -21,6 +21,16 @@ enum Command {
         /// Agent that sends the hook; only `claude` is supported
         agent: String,
     },
+    /// Print the tmux status-bar segment with waiting agents
+    Status,
+    /// Jump to the oldest asking agent, then the oldest done one
+    Next,
+    /// Clear `done` badges for the current and previous session
+    Seen,
+    /// Show recent output of a session (used by the picker preview)
+    Preview { target: String },
+    /// Enter copy mode in the remote tmux behind the current pane
+    CopyMode,
     /// Print this machine's projects and agent panes (inner tmux server)
     List {
         #[arg(long)]
@@ -50,6 +60,26 @@ fn run(args: Args) -> finter::MyResult<()> {
         (Some(Command::Hook { agent }), _) => {
             // Hooks never fail: a non-zero exit could block the agent.
             finter::run_hook(&agent);
+            Ok(())
+        }
+        (Some(Command::Status), _) => {
+            finter::run_status();
+            Ok(())
+        }
+        (Some(Command::Next), _) => {
+            finter::run_next();
+            Ok(())
+        }
+        (Some(Command::Seen), _) => {
+            finter::run_seen();
+            Ok(())
+        }
+        (Some(Command::Preview { target }), _) => {
+            finter::run_preview(&target);
+            Ok(())
+        }
+        (Some(Command::CopyMode), _) => {
+            finter::run_copy_mode();
             Ok(())
         }
         (Some(Command::List { json }), _) => finter::run_list(json),

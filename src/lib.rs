@@ -6,6 +6,7 @@ mod hook;
 mod picker;
 mod remote;
 mod state;
+mod status;
 mod tmux;
 
 use config::{get_folders, load_config, load_project_paths};
@@ -15,6 +16,7 @@ use tmux::{get_current_session, get_sessions, run_tmux_with_args, Socket};
 
 pub use config::save_paths;
 pub use hook::run_hook;
+pub use status::{run_copy_mode, run_next, run_preview, run_seen, run_status};
 pub type MyResult<T> = Result<T, Box<dyn Error>>;
 
 pub fn run_finter() -> Result<(), Box<dyn Error>> {

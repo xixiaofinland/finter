@@ -59,7 +59,7 @@ pub(crate) fn stdout_of(socket: Socket, args: &[&str]) -> Option<String> {
     }
     String::from_utf8(out.stdout)
         .ok()
-        .map(|s| s.trim_end().to_string())
+        .map(|s| s.trim_end_matches('\n').to_string())
 }
 
 pub(crate) fn get_sessions_on(socket: Socket) -> Vec<String> {
@@ -103,8 +103,8 @@ pub(crate) fn parse_pane_line(line: &str) -> Option<PaneRow> {
     let window = f.next()?.to_string();
     let pane_id = f.next()?.to_string();
     let state = AgentState::parse(f.next()?);
-    let since = f.next()?.parse().unwrap_or(0);
-    let remote = f.next()?.to_string();
+    let since = f.next().unwrap_or("").parse().unwrap_or(0);
+    let remote = f.next().unwrap_or("").to_string();
     let msg = f.next().unwrap_or("").to_string();
     Some(PaneRow {
         session,
@@ -209,6 +209,10 @@ mod tests {
         assert_eq!(row.remote, "mini:x");
         assert_eq!(row.msg, "a\tb");
         assert!(parse_pane_line("garbage").is_none());
+        // Trailing empty fields may be missing when output was trimmed.
+        let row = parse_pane_line("a\t1\t%1\tdone\t7").unwrap();
+        assert_eq!((row.state, row.since), (Some(AgentState::Done), 7));
+        assert_eq!(row.remote, "");
     }
 
     #[test]
