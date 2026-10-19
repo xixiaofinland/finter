@@ -30,19 +30,19 @@ finter -d /absolute/path/one /absolute/path/two
 
 Cause:
 
-- `~/.finter.toml` is malformed, or required fields are missing.
+- `~/.finter.toml` is malformed, or a field has the wrong type.
+- The legacy `[ssh]` table is still present. The error says: `the [ssh] table is no longer supported; migrate to [[hosts]]`.
 
 Fix:
 
-- Ensure config includes both `roots` and `[ssh]`:
+- Replace `[ssh]` with a host entry:
 
 ```toml
 roots = ["/home/username/projects"]
 
-[ssh]
-session_name = "ssh_mac_mini"
-primary = "user@192.168.1.200"
-remote_session_name = "mac_mini"
+[[hosts]]
+name = "mini"
+ssh = "mac-mini"
 ```
 
 ## `Err: no folder is found in the configured paths.`
@@ -73,37 +73,38 @@ Fix:
 tmux list-sessions
 ```
 
-## SSH session does not use Tailscale fallback
+## Host shows `mini ✕` or its projects are missing
 
 Cause:
 
-- `ssh.tailscale` is missing or empty in `~/.finter.toml`.
+- `ssh <alias> finter list --json` failed within 2 seconds (host off, off the network, key not loaded, or `finter` missing from the remote non-interactive `PATH`).
 
 Fix:
 
-- Set `ssh.tailscale` in `~/.finter.toml`, for example:
+- Run it by hand: `ssh -o BatchMode=yes <alias> finter list --json`.
+- Cached data from the last successful refresh is kept and marked offline; it is stored in `$XDG_RUNTIME_DIR/finter/<host>.json`.
 
-```toml
-[ssh]
-tailscale = "user@macmini.tailnet.ts.net"
-```
-
-- Restart tmux server if the popup still uses stale config/environment.
-
-## SSH connects but does not enter remote tmux
+## Remote window closes right away
 
 Cause:
 
-- `ssh.remote_session_name` is blank in `~/.finter.toml`.
+- `ssh -t <alias> finter attach <project>` failed (project not in the remote roots, or `tmux` missing there).
 
 Fix:
 
-- Set the remote tmux session explicitly, for example:
+- Run the same command in a shell to read the error.
 
-```toml
-[ssh]
-remote_session_name = "mac_mini"
-```
+## Agent badges never appear
+
+Cause:
+
+- The Claude Code hook is not registered, or `finter` is not on the `PATH` seen by the agent.
+- The agent runs outside tmux (`$TMUX_PANE` unset); the hook then does nothing by design.
+
+Fix:
+
+- Check pane options: `tmux show-options -p @agent_state`.
+- Pipe sample JSON in: `echo '{"hook_event_name":"Stop"}' | finter hook claude`.
 
 ## Canceled picker
 

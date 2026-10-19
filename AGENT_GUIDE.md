@@ -2,187 +2,140 @@
 
 ## Project Overview
 
-**Finter** is a Rust CLI tool for tmux users to quickly create and switch between tmux sessions based on project folders.
+**Finter** is a Rust CLI tool for tmux users to quickly create and switch between tmux sessions based on project folders, on this machine and on configured remote hosts, and to track which coding agents (Claude Code) are waiting for input.
 
 - **Language:** Rust (edition 2021)
-- **Current Version:** 0.2.0
-- **Primary Dependencies:** skim (fuzzy finder), clap (CLI parser), serde + toml (config)
+- **Current Version:** see `Cargo.toml`
+- **Primary Dependencies:** skim (fuzzy finder), clap (CLI parser), serde + toml + serde_json (config, hooks, `list --json`)
 
 ## What It Does
 
 1. Scans configured project root directories
-2. Lists child folders + existing tmux sessions in a fuzzy picker
+2. Lists child folders + existing tmux sessions + each `[[hosts]]` entry's projects (`mini/X`) in a fuzzy picker with agent state, wait time and a preview
 3. On selection:
    - **Existing session:** switches/attaches to it
-   - **New project session:** creates 2 windows in project directory and stays on window 1
-   - **New SSH session:** creates 1 window in home directory and auto-runs SSH in it
+   - **New local project session:** creates 2 windows in project directory and stays on window 1
+   - **Remote project:** creates local session `<host>/<X>` with 2 windows that run `ssh -t <alias> finter attach X [--term]`
+4. `finter hook claude` records agent state in pane options; `status`, `next`, `seen` read them
 
 ## Repository Structure
 
 ```
 finter/
-├── .github/
-│   └── workflows/
-│       └── publish.yml  # Auto-publish to crates.io on version change
+├── .github/workflows/publish.yml  # Auto-publish to crates.io on version change
 ├── src/
-│   ├── main.rs          # CLI argument parsing (clap)
-│   └── lib.rs           # Core logic (session management, tmux commands)
-├── docs/
-│   ├── behavior.md      # Architecture and session creation details
-│   ├── usage.md         # User guide
-│   ├── tmux-integration.md
-│   └── troubleshooting.md
-├── Cargo.toml           # Package manifest
-├── .finter.toml.example # Config template
-└── README.md            # User-facing documentation
+│   ├── main.rs      # clap CLI: -d and subcommands (hook, status, next, seen, preview, copy-mode, list, attach)
+│   ├── lib.rs       # glue: picker flow, list, attach
+│   ├── config.rs    # ~/.finter.toml: roots, [[hosts]], folder scanning
+│   ├── tmux.rs      # tmux runner (default server and `-L finter`), pane listing, option argv builders
+│   ├── state.rs     # AgentState, AgentEntry, ordering, next selection, age format
+│   ├── hook.rs      # `finter hook claude`, transcript tail
+│   ├── remote.rs    # list --json schema, ssh + cache, attach, wrapper session, inner.conf use
+│   ├── status.rs    # status, next, seen, preview, copy-mode
+│   ├── picker.rs    # picker rows + skim
+│   └── inner.conf   # tmux config for the remote `-L finter` server (include_str!)
+├── tests/fixtures/transcript.jsonl  # Claude transcript sample for hook tests
+├── docs/            # behavior, usage, tmux-integration, troubleshooting
+├── Cargo.toml
+└── .finter.toml.example
 ```
 
 ## Core Architecture
 
-### Entry Points (main.rs)
-- `-d/--directory <paths>`: Save project roots to config
-- No args: Run the fuzzy picker workflow
+### Contracts
 
-### Core Functions (lib.rs)
+- **Pane options:** `@agent`, `@agent_state` (`working|asking|done`), `@agent_since` (unix secs), `@agent_msg`; `@finter_remote=<alias>:<inner session>` on wrapper panes. Agent-agnostic: only the hook adapter knows about Claude.
+- **Inner server:** remote sessions live on `tmux -L finter` (socket name overridable with `FINTER_INNER_SOCKET`, used by smoke tests). Sessions are `X` and `X~term`.
+- **`finter list --json`:** `{"v":1,"projects":[...],"panes":[...]}`; bump `v` on incompatible changes (`remote::LIST_VERSION`).
+- **Cache:** `$XDG_RUNTIME_DIR/finter/<host>.json`, stale after 4s, offline flag keeps last data.
 
-Key functions to understand:
+### Testing seams
 
-- `run_finter()` (line 71): Main orchestration
-- `build_projects()` (line 131): Merges folders + sessions into picker items
-- `select_in_skim()` (line 278): Interactive fuzzy selection
-- `run_tmux_with_args()` (line 311): tmux command executor
-
-### Session Creation Logic (lib.rs:91-113)
-
-**Project sessions (when `is_ssh_session == false`):**
-```rust
-1. tmux new-session -ds <name> -c <path>      # window 1
-2. tmux new-window -t <name>:2 -c <path>      # window 2
-3. tmux select-window -t <name>:1             # keep window 1 active
-4. tmux switch-client -t <name>
-```
-
-**SSH sessions (when `is_ssh_session == true`):**
-```rust
-1. tmux new-session -ds <name> -c <home>      # window 1
-2. tmux send-keys -t <name>:1 "ssh -t ... 'tmux new-session -A -s mac_mini'" C-m
-3. tmux switch-client -t <name>
-```
+Logic is pure and unit-tested: `hook::decide`, `hook::last_assistant_text`, `status::render_status`, `state::pick_next`, `picker::build_rows`, `remote::merge_fetch`, `remote::load_host_with` (takes the fetch function, so ssh is mocked). tmux and ssh execution is not unit-tested; smoke test on a scratch server (`tmux -L finter-test`, `FINTER_INNER_SOCKET`, a fake `HOME`/`XDG_RUNTIME_DIR` with a seeded cache file).
 
 ## Configuration
 
 **Location:** `~/.finter.toml`
 
-**Structure:**
 ```toml
 roots = [
     "/home/username/projects",
     "/home/username/work",
 ]
 
-[ssh]
-session_name = "ssh_mac_mini"
-primary = "user@192.168.1.200"
-remote_session_name = "mac_mini"
-# Optional Tailscale fallback
-# tailscale = "user@macmini.tailnet.ts.net"
+[[hosts]]
+name = "mini"
+ssh = "mac-mini"
 ```
+
+The legacy `[ssh]` table is rejected with a message pointing to `[[hosts]]`.
 
 ## Development Workflow
 
 ### Build & Test
 ```bash
-cargo build          # Compile
-cargo test           # Run 12 unit tests
+cargo build
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt
 cargo run -- -d /path1 /path2  # Update config
 ```
 
 ### Code Style
-- **Formatter:** Use `rustfmt` (standard Rust formatting)
+- **Formatter:** `rustfmt`
 - **Comments:** Document WHY, not WHAT
-- **Error handling:** Uses `Box<dyn Error>` for flexibility
+- **Error handling:** `Box<dyn Error>` for user-facing commands; hooks and status never fail loudly
 
 ### Key Constraints
 - Only scans **immediate child directories** of configured roots
-- Session names: `.` and `:` replaced with `_` (tmux limitation)
-- Existing sessions shown with `*` prefix in picker
-- SSH session always included in picker regardless of existence
-
-## Recent Changes (v0.3.0)
-
-**Changed from v0.2.2:**
-- **Before:** SSH session opened a plain remote shell
-- **After:** SSH session attaches to or creates remote tmux session `mac_mini`
-- **Applies to:** SSH session creation path and SSH config parsing
-- **Files modified:** `src/lib.rs`, `docs/behavior.md`, `docs/usage.md`
+- Session names: `.` and `:` replaced with `_` (tmux limitation); remote wrappers are `host/X` (tmux accepts `/`)
+- Host names cannot contain whitespace, `/`, `:` or `.`
+- `finter hook` must exit 0 and stay quiet; with `$TMUX_PANE` unset it does nothing
+- tmux is assumed to use `base-index 1` on all hosts (`next` falls back to windows 1 and 2)
 
 ## Common Modification Patterns
 
-### Adding More Windows
-Modify `src/lib.rs:91-113` - add more `run_tmux_with_args` calls with window numbers
-
-### Changing Default Window
-Modify the `select-window` target in `src/lib.rs` (currently `:2`)
+### Adding an agent
+Add a hook adapter in `src/hook.rs` that maps its events to `AgentState` and writes the same pane options; the rest is agent-agnostic.
 
 ### Adding Config Options
-1. Update `Config` or `SshConfig` struct (line 10-31)
-2. Update `parse_config` test cases (line 481+)
-3. Update `.finter.toml.example`
+1. Update `Config` in `src/config.rs`
+2. Add `parse_config` tests
+3. Update `.finter.toml.example` and docs
 
-### Modifying Session Naming
-See `get_folders()` function (line 223) - currently replaces `.` and `:` with `_`
-
-## Testing Strategy
-
-**Unit tests:** 12 tests in `src/lib.rs`
-- Focus on `build_projects()` logic
-- SSH session handling
-- Config parsing
-
-**No integration tests** for tmux command execution (uses real tmux binary)
-
-**Test coverage areas:**
-- ✓ SSH session always included
-- ✓ Deduplication logic (folders vs sessions)
-- ✓ Current session prioritization
-- ✓ Config parsing validation
-- ✗ Window creation (not unit-testable)
+### Changing the status look
+Edit `badge` and `render_status` in `src/status.rs` and their tests.
 
 ## Common Pitfalls
 
-1. **Don't forget to update docs/** when changing session creation logic
-2. **Config requires `[ssh]` section** - parse will fail without it (see test line 482)
-3. **Home directory is fallback path** for existing sessions and SSH
-4. **Folder name collisions** across roots map to same session name
-5. **Session naming:** Ensure special chars are handled (see line 236-237)
+1. **Update docs/** when changing session creation or the pane-option/JSON contracts
+2. **Home directory is fallback path** for existing sessions without a folder
+3. **Folder name collisions** across roots map to the same session name
+4. `tmux` output may end with empty fields; never trim tabs from `list-panes` output (only newlines)
+5. Names embedded in status output must escape `#` as `##`
 
 ## Dependencies to Watch
 
-- `skim 0.10.4`: Fuzzy finder (popup UI)
-- `clap 4.x`: CLI parsing (using derive macros)
-- `toml 0.8`: Config file parsing
-- `home`: Cross-platform home directory detection
+- `skim 0.10.4`: Fuzzy finder (popup UI; preview command gets `{}` shell-quoted)
+- `clap 4.x`: CLI parsing (derive macros)
+- `toml 0.8`, `serde_json`: config and JSON
+- `home`: home directory detection
 
 ## Quick Reference Commands
 
 ```bash
-# Install from source
 cargo install --path .
-
-# Update config
 finter -d /path/to/projects /another/path
-
-# Run picker (typically via tmux binding)
-finter
-
-# Tmux binding example
-bind C-o display-popup -E "finter"
+finter                       # picker (typically via tmux binding)
+finter status                # status-bar segment
+finter list --json           # what other hosts see
+bind C-o display-popup -E "finter"   # tmux binding example
 ```
 
 ## When Making Changes
 
 **Checklist:**
-1. ✓ Modify `src/lib.rs` as needed
+1. ✓ Modify the relevant module under `src/`
 2. ✓ Update relevant `docs/*.md` files
 3. ✓ Add/update tests if logic changes
 4. ✓ Run `cargo test` to verify

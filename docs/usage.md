@@ -2,10 +2,18 @@
 
 ## CLI
 
-`finter` has two modes:
-
-- Configure roots: `finter -d <ABS_PATH> [ABS_PATH ...]`
-- Run picker: `finter`
+| Command | Purpose |
+| --- | --- |
+| `finter` | Run the picker |
+| `finter -d <ABS_PATH> [ABS_PATH ...]` | Save project roots |
+| `finter hook claude` | Record Claude Code state in the current tmux pane (stdin: hook JSON) |
+| `finter status` | Print the status-bar segment (waiting agents on this machine and hosts) |
+| `finter next` | Jump to the oldest asking agent, then the oldest done one |
+| `finter seen` | Clear `done` for the current and previous session |
+| `finter preview <target>` | Print recent pane output (picker preview) |
+| `finter copy-mode` | Enter copy mode in the remote tmux behind the current pane |
+| `finter list [--json]` | Print this machine's projects and agent panes (run over ssh by other hosts) |
+| `finter attach <name> [--term]` | Attach to the inner tmux session of a project (run over ssh by other hosts) |
 
 ## Configure Project Roots
 
@@ -15,7 +23,7 @@ Set one or more absolute root paths where your project folders live:
 finter -d /home/username/projects /home/username/work
 ```
 
-This writes `~/.finter.toml` and updates the `roots` field.
+This writes `~/.finter.toml` and updates the roots.
 
 `~/.finter.toml` format:
 
@@ -25,12 +33,9 @@ roots = [
     "/home/username/work",
 ]
 
-[ssh]
-session_name = "ssh_mac_mini"
-primary = "user@192.168.1.200"
-remote_session_name = "mac_mini"
-# optional tailscale fallback
-# tailscale = "user@macmini.tailnet.ts.net"
+[[hosts]]
+name = "mini"
+ssh = "mac-mini"
 ```
 
 Notes:
@@ -38,7 +43,9 @@ Notes:
 - Use absolute paths only.
 - `~/...` is not expanded by `finter`.
 - Invalid or non-existing paths are ignored at load time.
-- `finter -d ...` updates `roots` and keeps existing `[ssh]` settings.
+- `finter -d ...` updates the roots and keeps existing `[[hosts]]` entries.
+- Host `name` must be non-empty and free of whitespace, `/`, `:` and `.` (it becomes the session prefix `name/project`).
+- A legacy `[ssh]` table is rejected with a migration hint.
 - Legacy `~/.finter` is no longer used.
 
 ## Run Daily
@@ -51,35 +58,45 @@ finter
 
 Flow:
 
-1. Reads roots and SSH settings from `~/.finter.toml`.
+1. Reads roots and hosts from `~/.finter.toml`.
 2. Finds immediate child directories under each root.
-3. Reads current tmux sessions.
-4. Adds built-in item `ssh_mac_mini`.
-5. Shows combined list in fuzzy picker.
-6. Select item to switch/create and attach.
+3. Reads current tmux sessions and agent states.
+4. Asks each host for `finter list --json` (cached 4 seconds).
+5. Shows one list: waiting agents first, then working, then existing sessions, then folders.
+6. Select an item to switch/create and attach.
 
-Configured SSH session behavior:
+Each row shows `icon name wait-time message`:
 
-- If session exists, `finter` just switches/attaches.
-- If session does not exist, `finter` creates a one-window session and sends:
+| Icon | Meaning |
+| --- | --- |
+| `❓` | agent is asking (needs permission or input) |
+| `✅` | agent finished a turn |
+| `⚙` | agent is working |
+| `*` | session exists, no agent state |
+| blank | folder without session |
 
-```bash
-ssh -t <ssh.primary> 'tmux new-session -A -s <ssh.remote_session_name>'
-```
+The right half previews the last lines of the pane (`finter preview`).
 
-- Optional Tailscale fallback in TOML:
+## Remote Projects
 
-```toml
-[ssh]
-tailscale = "user@macmini.tailnet.ts.net"
-```
+With `[[hosts]] name = "mini"`, remote project `recap` appears as `mini/recap`. Selecting it creates a local session `mini/recap` (if missing) with two windows:
 
-When `ssh.tailscale` is set, `finter` sends a command that tries LAN first and falls back to this target only if `192.168.1.200:22` is unreachable.
-- `ssh.remote_session_name` defaults to `mac_mini`.
-- Set `ssh.remote_session_name = ""` to disable remote tmux attach/create and use plain SSH instead.
+1. `ssh -t <alias> finter attach recap`: Claude window
+2. `ssh -t <alias> finter attach recap --term`: terminal window
 
-## Typical Tmux Workflow
+Both attach to sessions `recap` and `recap~term` on a dedicated tmux server (`tmux -L finter`) on the remote machine, so they survive disconnects. Each local pane carries `@finter_remote=<alias>:<inner session>`.
 
-1. Configure roots once with `-d`.
-2. Bind a tmux key to `display-popup -E "finter"`.
-3. Hit hotkey, select folder, continue work in that session.
+## Agent Status
+
+`finter hook claude` maps Claude Code hook events to a state stored in the pane:
+
+| Event | State |
+| --- | --- |
+| `UserPromptSubmit`, `PreToolUse` | `working` (no write if already working) |
+| `Notification` | `asking`, message = notification text |
+| `Stop` | `done`, message = last assistant text (about 60 chars) |
+| `SessionEnd` | all `@agent_*` options removed |
+
+With `$TMUX_PANE` unset (for example headless `claude -p`) the hook does nothing. It always exits 0 and only writes to stderr on errors.
+
+`finter status` shows `❓name` (asking, red background), `✅name` (done, green), `⚙N` (working count), at most 3 names then `+N`, and `host ✕` when a host is unreachable. Remote items use other colours. The current session is never badged.

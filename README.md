@@ -32,15 +32,15 @@ bind C-o display-popup -E "finter"
 
 ## What It Does
 
-- Reads configured roots and SSH settings from `~/.finter.toml`.
+- Reads roots and remote hosts from `~/.finter.toml`.
 - Scans immediate child directories of those roots.
-- Lists those folders together with existing tmux session names.
-- Always includes the configured SSH session item (default: `ssh_mac_mini`).
+- Lists those folders together with existing tmux sessions and, for each `[[hosts]]` entry, that machine's projects as `<host>/<project>`.
+- Shows which coding agents (Claude Code) are asking, done or working, with wait time and a one-line message, and previews the pane.
 - Uses a popup-compatible fuzzy selector (`skim`).
 - On select:
   - existing session: switch/attach to it
   - missing project session: create detached session in folder, create a second window, stay on window 1, then switch/attach
-  - missing SSH session: create one window, auto-run SSH into the remote `mac_mini` tmux session, then switch/attach
+  - remote project: create local session `<host>/<project>` with window 1 attached to the remote Claude session and window 2 to the remote terminal session, then switch/attach
 
 Default `~/.finter.toml` (created by `finter -d ...`):
 
@@ -50,22 +50,23 @@ roots = [
     "/home/username/work",
 ]
 
-[ssh]
-session_name = "ssh_mac_mini"
-primary = "user@192.168.1.200"
-remote_session_name = "mac_mini"
+# Optional: one entry per remote machine.
+[[hosts]]
+name = "mini"
+ssh = "mac-mini"
 ```
 
 You can also copy the repo template: `.finter.toml.example`.
 
-SSH details:
+Notes:
 
-- Connect command is built from `ssh.primary`.
-- By default, `finter` runs remote `tmux new-session -A -s mac_mini` over SSH so it attaches to that session or creates it if missing.
-- Optional fallback is `ssh.tailscale` in TOML (for example `user@macmini.tailnet.ts.net`).
-- When `ssh.tailscale` is set, `finter` tries LAN first and falls back only if LAN SSH is unreachable.
-- Set `ssh.remote_session_name = ""` to disable the remote tmux wrapper and use plain SSH instead.
+- `ssh` is an alias from `~/.ssh/config` (or `user@host`); the remote needs `finter` on its non-interactive `PATH` and the same `~/.finter.toml` roots.
+- The legacy `[ssh]` table is no longer supported: finter refuses to start and tells you to migrate to `[[hosts]]`.
 - Legacy `~/.finter` path-list config is no longer read.
+
+## Agent Status
+
+`finter hook claude` records what Claude Code is doing in the tmux pane it runs in (pane options `@agent`, `@agent_state`, `@agent_since`, `@agent_msg`). `finter status` renders the waiting agents for the tmux status bar, `finter next` jumps to the oldest one, and `finter seen` clears `done` badges. See [Tmux Integration](docs/tmux-integration.md) for the hook and tmux wiring.
 
 ## Docs
 
