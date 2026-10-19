@@ -1,5 +1,10 @@
+// TODO(finter-0.4): removed once every module is wired into the CLI.
+#![allow(dead_code)]
+
 mod config;
+mod hook;
 mod picker;
+mod state;
 mod tmux;
 
 use config::{get_folders, load_config, load_project_paths};
@@ -8,6 +13,7 @@ use std::error::Error;
 use tmux::{get_current_session, get_sessions, run_tmux_with_args};
 
 pub use config::save_paths;
+pub use hook::run_hook;
 pub type MyResult<T> = Result<T, Box<dyn Error>>;
 
 pub fn run_finter() -> Result<(), Box<dyn Error>> {

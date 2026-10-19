@@ -1,0 +1,9 @@
+{"type":"summary","summary":"fixture"}
+{"parentUuid":null,"type":"user","message":{"role":"user","content":"please fix the bug"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Looking at it now."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a\nb"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"All done.\n\nI fixed the   bug in   parser.rs and added a regression test for the empty-input case."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"wrap up"}]}}
+{"type":"system","subtype":"stop_hook_summary"}

@@ -1,0 +1,270 @@
+use crate::state::AgentState;
+use crate::tmux::{self, Socket};
+use serde::Deserialize;
+use std::{
+    fs::File,
+    io::{Read, Seek, SeekFrom},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+const MSG_MAX_CHARS: usize = 60;
+/// How much of the transcript's end is scanned for the last assistant text.
+const TRANSCRIPT_TAIL_BYTES: u64 = 512 * 1024;
+
+/// The subset of Claude Code's hook JSON that finter needs.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct HookInput {
+    #[serde(default)]
+    pub(crate) hook_event_name: String,
+    #[serde(default)]
+    pub(crate) message: Option<String>,
+    #[serde(default)]
+    pub(crate) transcript_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Plan {
+    Skip,
+    Set(AgentState),
+    Clear,
+}
+
+/// Map a hook event to a pane update, given the pane's current state.
+pub(crate) fn decide(event: &str, current: Option<AgentState>) -> Plan {
+    match event {
+        "UserPromptSubmit" | "PreToolUse" => {
+            if current == Some(AgentState::Working) {
+                Plan::Skip
+            } else {
+                Plan::Set(AgentState::Working)
+            }
+        }
+        "Notification" => Plan::Set(AgentState::Asking),
+        "Stop" => Plan::Set(AgentState::Done),
+        "SessionEnd" => Plan::Clear,
+        _ => Plan::Skip,
+    }
+}
+
+/// Collapse whitespace and cut to `max` chars (on a char boundary), marking the cut with `…`.
+pub(crate) fn summarize(text: &str, max: usize) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= max {
+        return collapsed;
+    }
+    let mut cut: String = collapsed.chars().take(max.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
+
+/// Last assistant text block in a JSONL transcript tail.
+pub(crate) fn last_assistant_text(jsonl: &str) -> Option<String> {
+    for line in jsonl.lines().rev() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(blocks) = value.pointer("/message/content").and_then(|c| c.as_array()) else {
+            continue;
+        };
+        let text = blocks
+            .iter()
+            .rev()
+            .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+            .find_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .filter(|t| !t.trim().is_empty());
+        if let Some(text) = text {
+            return Some(text.to_string());
+        }
+    }
+    None
+}
+
+/// Read at most the last `max_bytes` of a file as complete lines.
+fn read_tail(path: &str, max_bytes: u64) -> std::io::Result<String> {
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start))?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)?;
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    if start == 0 {
+        return Ok(text);
+    }
+    // The first line is probably cut mid-way.
+    Ok(text
+        .split_once('\n')
+        .map(|(_, rest)| rest.to_string())
+        .unwrap_or_default())
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn current_state(pane: &str) -> Option<AgentState> {
+    let value = tmux::stdout_of(
+        Socket::Default,
+        &["display-message", "-p", "-t", pane, "#{@agent_state}"],
+    )?;
+    AgentState::parse(value.trim())
+}
+
+/// Entry point of `finter hook <agent>`. Never fails: Claude must not be blocked.
+pub fn run_hook(agent: &str) {
+    if let Err(e) = try_hook(agent) {
+        eprintln!("finter hook: {e}");
+    }
+}
+
+fn try_hook(agent: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if agent != "claude" {
+        return Err(format!("unsupported agent `{agent}`").into());
+    }
+    // No pane means a headless run (`claude -p`): nothing to track.
+    let Ok(pane) = std::env::var("TMUX_PANE") else {
+        return Ok(());
+    };
+    if pane.is_empty() {
+        return Ok(());
+    }
+
+    let mut raw = String::new();
+    std::io::stdin().read_to_string(&mut raw)?;
+    let input: HookInput = serde_json::from_str(&raw)?;
+
+    let current = match input.hook_event_name.as_str() {
+        "UserPromptSubmit" | "PreToolUse" => current_state(&pane),
+        _ => None,
+    };
+    match decide(&input.hook_event_name, current) {
+        Plan::Skip => {}
+        Plan::Clear => {
+            tmux::run_owned(Socket::Default, &tmux::clear_args(&pane));
+        }
+        Plan::Set(state) => {
+            let msg = match state {
+                AgentState::Asking => input
+                    .message
+                    .as_deref()
+                    .map(|m| summarize(m, MSG_MAX_CHARS)),
+                AgentState::Done => input
+                    .transcript_path
+                    .as_deref()
+                    .and_then(|p| read_tail(p, TRANSCRIPT_TAIL_BYTES).ok())
+                    .and_then(|t| last_assistant_text(&t))
+                    .map(|t| summarize(&t, MSG_MAX_CHARS)),
+                AgentState::Working => None,
+            }
+            .unwrap_or_default();
+            let args = tmux::set_state_args(&pane, agent, state, now_secs(), &msg);
+            tmux::run_owned(Socket::Default, &args);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TRANSCRIPT: &str = include_str!("../tests/fixtures/transcript.jsonl");
+
+    fn parse(json: &str) -> HookInput {
+        serde_json::from_str(json).expect("hook json")
+    }
+
+    #[test]
+    fn hook_json_maps_to_states() {
+        let ev = |json: &str, cur| decide(&parse(json).hook_event_name, cur);
+        assert_eq!(
+            ev(
+                r#"{"hook_event_name":"UserPromptSubmit","prompt":"hi"}"#,
+                None
+            ),
+            Plan::Set(AgentState::Working)
+        );
+        assert_eq!(
+            ev(
+                r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#,
+                Some(AgentState::Asking)
+            ),
+            Plan::Set(AgentState::Working)
+        );
+        assert_eq!(
+            ev(r#"{"hook_event_name":"Notification","message":"x"}"#, None),
+            Plan::Set(AgentState::Asking)
+        );
+        assert_eq!(
+            ev(r#"{"hook_event_name":"Stop"}"#, Some(AgentState::Working)),
+            Plan::Set(AgentState::Done)
+        );
+        assert_eq!(ev(r#"{"hook_event_name":"SessionEnd"}"#, None), Plan::Clear);
+        assert_eq!(ev(r#"{"hook_event_name":"Other"}"#, None), Plan::Skip);
+    }
+
+    #[test]
+    fn working_write_is_skipped_when_already_working() {
+        for event in ["UserPromptSubmit", "PreToolUse"] {
+            assert_eq!(decide(event, Some(AgentState::Working)), Plan::Skip);
+            assert_eq!(
+                decide(event, Some(AgentState::Done)),
+                Plan::Set(AgentState::Working)
+            );
+        }
+    }
+
+    #[test]
+    fn hook_input_tolerates_missing_fields() {
+        let input = parse(
+            r#"{"hook_event_name":"Notification","message":"Claude needs permission","session_id":"s"}"#,
+        );
+        assert_eq!(input.message.as_deref(), Some("Claude needs permission"));
+        assert!(input.transcript_path.is_none());
+        assert_eq!(parse("{}").hook_event_name, "");
+    }
+
+    #[test]
+    fn transcript_tail_yields_last_assistant_text() {
+        let text = last_assistant_text(TRANSCRIPT).expect("text");
+        assert!(text.starts_with("All done"), "{text}");
+    }
+
+    #[test]
+    fn transcript_without_assistant_text_gives_none() {
+        let only_tools = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{}}]}}
+{"type":"user","message":{"role":"user","content":"hi"}}
+not json at all"#;
+        assert_eq!(last_assistant_text(only_tools), None);
+        assert_eq!(last_assistant_text(""), None);
+    }
+
+    #[test]
+    fn summarize_collapses_whitespace_and_truncates_on_char_boundary() {
+        assert_eq!(summarize("  a \n\n b\tc ", 60), "a b c");
+        let long = "漢".repeat(100);
+        let out = summarize(&long, 60);
+        assert_eq!(out.chars().count(), 60);
+        assert!(out.ends_with('…'));
+        assert_eq!(summarize("short", 60), "short");
+    }
+
+    #[test]
+    fn read_tail_drops_partial_first_line() {
+        let dir = std::env::temp_dir().join(format!("finter-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, "first-line-long\nsecond\nthird\n").unwrap();
+        let tail = read_tail(path.to_str().unwrap(), 10).unwrap();
+        assert_eq!(tail, "third\n");
+        let all = read_tail(path.to_str().unwrap(), 1000).unwrap();
+        assert!(all.starts_with("first-line-long"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
