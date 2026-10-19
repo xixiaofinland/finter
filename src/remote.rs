@@ -96,18 +96,42 @@ pub(crate) fn entries_from_list(host: &str, list: &ListOutput) -> Vec<AgentEntry
         .collect()
 }
 
-/// Parse ssh output, tolerating a login banner before the JSON object.
+/// Parse ssh output. The JSON is the last line that starts with `{`, so login
+/// banners cannot break it. Newer schema versions are accepted (fields are only
+/// ever added), and panes with an unknown state are skipped.
 pub(crate) fn parse_list_output(raw: &str) -> Result<ListOutput, String> {
-    let start = raw.find('{').ok_or("no JSON in remote output")?;
-    let list: ListOutput =
-        serde_json::from_str(raw[start..].trim()).map_err(|e| format!("bad remote JSON: {e}"))?;
-    if list.v != LIST_VERSION {
-        return Err(format!(
-            "remote finter speaks list version {}, expected {LIST_VERSION}",
-            list.v
-        ));
+    let line = raw
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with('{'))
+        .ok_or("no JSON in remote output")?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(line.trim()).map_err(|e| format!("bad remote JSON: {e}"))?;
+    let version = value.get("v").and_then(|v| v.as_u64()).unwrap_or(0);
+    if version < u64::from(LIST_VERSION) {
+        return Err(format!("unsupported list version {version}"));
     }
-    Ok(list)
+    if let Some(panes) = value.get_mut("panes").and_then(|p| p.as_array_mut()) {
+        panes.retain(|p| {
+            p.get("state")
+                .and_then(|s| s.as_str())
+                .and_then(AgentState::parse)
+                .is_some()
+        });
+    }
+    serde_json::from_value(value).map_err(|e| format!("bad remote JSON: {e}"))
+}
+
+/// Short, human-facing reason for a failed `ssh ... finter list --json`.
+pub(crate) fn ssh_failure_reason(code: Option<i32>) -> String {
+    match code {
+        Some(255) => "unreachable".to_string(),
+        // clap's usage error: an old finter without the `list` subcommand.
+        Some(2) => "finter too old?".to_string(),
+        Some(127) => "finter not found".to_string(),
+        Some(c) => format!("ssh exit {c}"),
+        None => "ssh killed".to_string(),
+    }
 }
 
 // ── host cache
@@ -118,6 +142,9 @@ pub(crate) struct HostCache {
     /// True when the last refresh failed; `data` is then the last good result.
     pub(crate) offline: bool,
     pub(crate) data: Option<ListOutput>,
+    /// Short reason of the last failed refresh, shown next to the host in the status bar.
+    #[serde(default)]
+    pub(crate) error: Option<String>,
 }
 
 pub(crate) fn is_stale(cache: &HostCache, now: u64) -> bool {
@@ -140,11 +167,13 @@ pub(crate) fn merge_fetch(
             fetched_at: now,
             offline: false,
             data: Some(data),
+            error: None,
         },
-        Err(_) => HostCache {
+        Err(e) => HostCache {
             fetched_at: now,
             offline: true,
             data: prev.and_then(|p| p.data),
+            error: Some(e),
         },
     }
 }
@@ -226,7 +255,7 @@ pub(crate) fn ssh_run(alias: &str, remote_cmd: &str) -> Result<String, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("ssh: {e}"))?;
+        .map_err(|_| "ssh not found".to_string())?;
     let mut stdout = child.stdout.take().ok_or("no stdout")?;
     let reader = thread::spawn(move || {
         let mut buf = String::new();
@@ -241,7 +270,7 @@ pub(crate) fn ssh_run(alias: &str, remote_cmd: &str) -> Result<String, String> {
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
-                return Err("ssh timed out".to_string());
+                return Err("timed out".to_string());
             }
             None => thread::sleep(Duration::from_millis(20)),
         }
@@ -250,7 +279,7 @@ pub(crate) fn ssh_run(alias: &str, remote_cmd: &str) -> Result<String, String> {
     if status.success() {
         Ok(out)
     } else {
-        Err(format!("ssh exited with {status}"))
+        Err(ssh_failure_reason(status.code()))
     }
 }
 
@@ -280,6 +309,7 @@ pub(crate) fn remote_tmux(args: &[&str]) -> String {
 pub(crate) struct HostState {
     pub(crate) host: HostConfig,
     pub(crate) offline: bool,
+    pub(crate) error: Option<String>,
     pub(crate) data: Option<ListOutput>,
 }
 
@@ -308,6 +338,7 @@ pub(crate) fn load_host_with(
             fetched_at: 0,
             offline: false,
             data: None,
+            error: None,
         },
         prev => {
             let fresh = merge_fetch(prev, now, fetch(host));
@@ -318,6 +349,7 @@ pub(crate) fn load_host_with(
     HostState {
         host: host.clone(),
         offline: cache.offline,
+        error: cache.error,
         data: cache.data,
     }
 }
@@ -496,12 +528,35 @@ mod tests {
     }
 
     #[test]
-    fn parse_list_output_skips_banner_and_checks_version() {
+    fn parse_list_output_uses_last_json_line_and_tolerates_newer_schemas() {
         let json = serde_json::to_string(&sample_list()).unwrap();
-        assert!(parse_list_output(&format!("Welcome!\n{json}\n")).is_ok());
+        assert!(parse_list_output(&format!("Welcome {{brace}}\n{json}\n")).is_ok());
+        // A trailing banner line that is not JSON-looking is fine; a decoy `{` line before is ignored.
+        assert!(parse_list_output(&format!("{{decoy\n{json}\n")).is_ok());
         assert!(parse_list_output("nothing").is_err());
-        let wrong = json.replace("\"v\":1", "\"v\":2");
-        assert!(parse_list_output(&wrong).unwrap_err().contains("version"));
+        let newer = json.replace("\"v\":1", "\"v\":2");
+        assert_eq!(parse_list_output(&newer).unwrap().v, 2);
+        let zero = json.replace("\"v\":1", "\"v\":0");
+        assert!(parse_list_output(&zero).unwrap_err().contains("version"));
+    }
+
+    #[test]
+    fn parse_list_output_skips_panes_with_unknown_state() {
+        let raw = r#"{"v":1,"projects":[],"panes":[
+            {"session":"a","window":"1","pane":"%1","state":"sleeping","since":1,"msg":""},
+            {"session":"b","window":"1","pane":"%2","state":"done","since":2,"msg":"ok"}]}"#
+            .replace('\n', "");
+        let list = parse_list_output(&raw).unwrap();
+        assert_eq!(list.panes.len(), 1);
+        assert_eq!(list.panes[0].session, "b");
+    }
+
+    #[test]
+    fn ssh_failures_get_short_reasons() {
+        assert_eq!(ssh_failure_reason(Some(255)), "unreachable");
+        assert_eq!(ssh_failure_reason(Some(2)), "finter too old?");
+        assert_eq!(ssh_failure_reason(Some(127)), "finter not found");
+        assert_eq!(ssh_failure_reason(Some(1)), "ssh exit 1");
     }
 
     #[test]
@@ -518,6 +573,7 @@ mod tests {
             fetched_at: 100,
             offline: false,
             data: None,
+            error: None,
         };
         assert!(!is_stale(&c, 103));
         assert!(is_stale(&c, 104));
@@ -535,10 +591,11 @@ mod tests {
         assert!(bad.offline);
         assert_eq!(bad.data, good.data);
         assert_eq!(bad.fetched_at, 20);
+        assert_eq!(bad.error.as_deref(), Some("timeout"));
         let cold = merge_fetch(None, 30, Err("timeout".into()));
         assert!(cold.offline && cold.data.is_none());
         let recovered = merge_fetch(Some(bad), 40, Ok(sample_list()));
-        assert!(!recovered.offline);
+        assert!(!recovered.offline && recovered.error.is_none());
     }
 
     #[test]

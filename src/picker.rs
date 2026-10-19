@@ -258,6 +258,7 @@ mod tests {
         HostState {
             host: host(),
             offline,
+            error: None,
             data: Some(ListOutput {
                 v: LIST_VERSION,
                 projects: projects
@@ -360,6 +361,7 @@ mod tests {
         let hs = HostState {
             host: host(),
             offline: true,
+            error: None,
             data: None,
         };
         let sessions: Vec<String> = vec!["mini/gone".into()];

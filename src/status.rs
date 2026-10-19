@@ -44,7 +44,7 @@ fn badge(entry: &AgentEntry) -> String {
 /// `current` is the session the client looks at; it is never badged.
 pub(crate) fn render_status(
     entries: &[AgentEntry],
-    offline_hosts: &[String],
+    offline_hosts: &[(String, Option<String>)],
     current: Option<&str>,
 ) -> String {
     let visible: Vec<AgentEntry> = entries
@@ -63,8 +63,12 @@ pub(crate) fn render_status(
     if working > 0 {
         parts.push(format!("⚙{working}"));
     }
-    for host in offline_hosts {
-        parts.push(format!("#[fg=colour243]{} ✕#[default]", escape(host)));
+    for (host, reason) in offline_hosts {
+        let why = reason
+            .as_deref()
+            .map(|r| format!(" ({})", escape(r)))
+            .unwrap_or_default();
+        parts.push(format!("#[fg=colour243]{} ✕{why}#[default]", escape(host)));
     }
     parts.join(" ")
 }
@@ -100,10 +104,10 @@ pub(crate) fn resolve_current(
 pub fn run_status(current_arg: Option<&str>) {
     let config = load_config_quiet();
     let (entries, hosts) = gather(config.as_ref(), true);
-    let offline: Vec<String> = hosts
+    let offline: Vec<(String, Option<String>)> = hosts
         .iter()
         .filter(|h| h.offline)
-        .map(|h| h.host.name.clone())
+        .map(|h| (h.host.name.clone(), h.error.clone()))
         .collect();
     let current = resolve_current(current_arg, || {
         std::env::var_os("TMUX").and_then(|_| tmux::get_current_session())
@@ -446,8 +450,11 @@ mod tests {
 
     #[test]
     fn offline_hosts_are_listed_and_names_are_escaped() {
-        let out = render_status(&[], &["mini".to_string()], None);
+        let out = render_status(&[], &[("mini".to_string(), None)], None);
         assert_eq!(out, "#[fg=colour243]mini ✕#[default]");
+        let why = Some("finter too old?".to_string());
+        let out = render_status(&[], &[("mini".to_string(), why)], None);
+        assert_eq!(out, "#[fg=colour243]mini ✕ (finter too old?)#[default]");
         let v = vec![e(None, "c#sharp", AgentState::Done, 1)];
         assert!(render_status(&v, &[], None).contains("c##sharp"));
     }
