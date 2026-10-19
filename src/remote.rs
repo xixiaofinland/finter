@@ -363,10 +363,12 @@ pub(crate) fn split_remote_tag(tag: &str) -> Option<(&str, &str)> {
 /// Wrapped in `sh -c` because the tmux default-shell may be fish.
 pub(crate) fn attach_command(alias: &str, project: &str, term: bool) -> String {
     let suffix = if term { " --term" } else { "" };
+    // ssh joins its argv with spaces for the remote shell, so send one quoted string.
+    let remote = format!("finter attach {}{suffix}", shell_quote(project));
     let script = format!(
-        "while :; do ssh -t {} finter attach {}{suffix}; rc=$?; [ $rc -eq 255 ] || exit $rc; echo 'finter: reconnecting...'; sleep 2; done",
+        "while :; do ssh -t {} {}; rc=$?; [ $rc -eq 255 ] || exit $rc; echo 'finter: reconnecting...'; sleep 2; done",
         shell_quote(alias),
-        shell_quote(project)
+        shell_quote(&remote)
     );
     format!("sh -c {}", shell_quote(&script))
 }
@@ -541,6 +543,31 @@ mod tests {
             Some(("mac-mini", "x~term"))
         );
         assert_eq!(split_remote_tag("nocolon"), None);
+    }
+
+    #[test]
+    fn attach_command_survives_hostile_project_names() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("finter-fakessh-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        // Fake ssh: like the real one it hands argument 3 to a remote shell.
+        let ssh = dir.join("ssh");
+        fs::write(&ssh, "#!/bin/sh\nsh -c \"printf '<%s>' $3\"\n").unwrap();
+        fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
+        for (name, term, expect) in [
+            ("my proj", false, "<finter><attach><my proj>"),
+            ("it's", true, "<finter><attach><it's><--term>"),
+        ] {
+            let cmd = attach_command("alias", name, term);
+            let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap());
+            let out = Command::new("sh")
+                .args(["-c", &cmd])
+                .env("PATH", path)
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout), expect);
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
