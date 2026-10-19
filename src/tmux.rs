@@ -1,8 +1,11 @@
 use crate::state::{AgentEntry, AgentState};
 use std::{
     error::Error,
+    io::Read,
     os::unix::process::ExitStatusExt,
     process::{self, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 /// Which tmux server a command talks to.
@@ -45,6 +48,46 @@ pub(crate) fn run_on(socket: Socket, args: &[&str]) -> process::Output {
         .stdin(Stdio::inherit())
         .output()
         .unwrap_or_else(|e| failed_output(&format!("failed to run tmux: {e}")))
+}
+
+/// Like `run_on`, but kills tmux after `deadline`. Hooks use it so a wedged tmux
+/// server can never hang the agent. `None` means failure or timeout.
+pub(crate) fn run_deadline(
+    socket: Socket,
+    args: &[&str],
+    deadline: Duration,
+) -> Option<process::Output> {
+    let mut child = base_command(socket)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait().ok()? {
+            Some(status) => break status,
+            None if started.elapsed() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return None;
+            }
+            None => thread::sleep(Duration::from_millis(5)),
+        }
+    };
+    Some(process::Output {
+        status,
+        stdout: reader.join().unwrap_or_default(),
+        stderr: Vec::new(),
+    })
 }
 
 pub(crate) fn run_tmux_with_args(args: &[&str]) -> process::Output {
@@ -196,6 +239,16 @@ pub(crate) fn run_owned(socket: Socket, args: &[String]) -> process::Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_deadline_returns_none_when_tmux_is_missing_or_slow() {
+        // `-V` is quick and succeeds wherever tmux exists; a zero deadline must still not hang.
+        let quick = run_deadline(Socket::Default, &["-V"], Duration::from_secs(5));
+        if let Some(out) = quick {
+            assert!(out.status.success());
+        }
+        let _ = run_deadline(Socket::Default, &["-V"], Duration::from_millis(0));
+    }
 
     #[test]
     fn parse_pane_line_reads_agent_fields() {

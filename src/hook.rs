@@ -4,9 +4,11 @@ use serde::Deserialize;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+/// Upper bound for each tmux call; the agent waits for hooks, so never hang.
+const TMUX_DEADLINE: Duration = Duration::from_secs(2);
 const MSG_MAX_CHARS: usize = 60;
 /// How much of the transcript's end is scanned for the last assistant text.
 const TRANSCRIPT_TAIL_BYTES: u64 = 512 * 1024;
@@ -117,11 +119,19 @@ fn now_secs() -> u64 {
 }
 
 fn current_state(pane: &str) -> Option<AgentState> {
-    let value = tmux::stdout_of(
+    let out = tmux::run_deadline(
         Socket::Default,
         &["display-message", "-p", "-t", pane, "#{@agent_state}"],
+        TMUX_DEADLINE,
     )?;
-    AgentState::parse(value.trim())
+    AgentState::parse(String::from_utf8_lossy(&out.stdout).trim())
+}
+
+fn run_tmux_args(args: &[String]) {
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    if tmux::run_deadline(Socket::Default, &refs, TMUX_DEADLINE).is_none() {
+        eprintln!("finter hook: tmux did not answer within {TMUX_DEADLINE:?}");
+    }
 }
 
 /// Entry point of `finter hook <agent>`. Never fails: Claude must not be blocked.
@@ -158,7 +168,7 @@ fn try_hook(agent: &str) -> Result<(), Box<dyn std::error::Error>> {
     ) {
         Plan::Skip => {}
         Plan::Clear => {
-            tmux::run_owned(Socket::Default, &tmux::clear_args(&pane));
+            run_tmux_args(&tmux::clear_args(&pane));
         }
         Plan::Set(state) => {
             let msg = match state {
@@ -176,7 +186,7 @@ fn try_hook(agent: &str) -> Result<(), Box<dyn std::error::Error>> {
             }
             .unwrap_or_default();
             let args = tmux::set_state_args(&pane, agent, state, now_secs(), &msg);
-            tmux::run_owned(Socket::Default, &args);
+            run_tmux_args(&args);
         }
     }
     Ok(())
