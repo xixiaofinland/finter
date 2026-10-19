@@ -358,13 +358,17 @@ pub(crate) fn split_remote_tag(tag: &str) -> Option<(&str, &str)> {
         .filter(|(a, s)| !a.is_empty() && !s.is_empty())
 }
 
+/// Window command: retry ssh only when the connection drops (exit 255).
+/// Any other exit (clean detach, killed inner session, remote error) ends the loop.
+/// Wrapped in `sh -c` because the tmux default-shell may be fish.
 pub(crate) fn attach_command(alias: &str, project: &str, term: bool) -> String {
     let suffix = if term { " --term" } else { "" };
-    format!(
-        "ssh -t {} finter attach {}{suffix}",
+    let script = format!(
+        "while :; do ssh -t {} finter attach {}{suffix}; rc=$?; [ $rc -eq 255 ] || exit $rc; echo 'finter: reconnecting...'; sleep 2; done",
         shell_quote(alias),
         shell_quote(project)
-    )
+    );
+    format!("sh -c {}", shell_quote(&script))
 }
 
 /// Create local session `host/project` with window 1 = claude, window 2 = terminal,
@@ -523,10 +527,14 @@ mod tests {
         let folders = vec![("a".to_string(), "/p/a".to_string())];
         assert_eq!(find_project_path(&folders, "a"), Some("/p/a"));
         assert_eq!(find_project_path(&folders, "b"), None);
-        assert_eq!(
-            attach_command("mac-mini", "x", true),
-            "ssh -t 'mac-mini' finter attach 'x' --term"
-        );
+        let cmd = attach_command("mac-mini", "x", true);
+        assert!(cmd.starts_with("sh -c '"));
+        assert!(cmd.contains("ssh -t "));
+        assert!(cmd.contains("finter attach "));
+        assert!(cmd.contains("--term"));
+        assert!(cmd.contains("[ $rc -eq 255 ] || exit $rc"));
+        assert!(cmd.contains("finter: reconnecting..."));
+        assert!(!attach_command("mac-mini", "x", false).contains("--term"));
         assert_eq!(remote_tag("mac-mini", "x~term"), "mac-mini:x~term");
         assert_eq!(
             split_remote_tag("mac-mini:x~term"),
