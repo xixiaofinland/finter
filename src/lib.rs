@@ -4,13 +4,14 @@
 mod config;
 mod hook;
 mod picker;
+mod remote;
 mod state;
 mod tmux;
 
 use config::{get_folders, load_config, load_project_paths};
 use picker::{build_projects, get_match, select_in_skim};
 use std::error::Error;
-use tmux::{get_current_session, get_sessions, run_tmux_with_args};
+use tmux::{get_current_session, get_sessions, run_tmux_with_args, Socket};
 
 pub use config::save_paths;
 pub use hook::run_hook;
@@ -48,4 +49,36 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
         run_tmux_with_args(&["attach", "-t", &session_name]);
     }
     Ok(())
+}
+
+/// `finter list`: this machine's projects and agent panes on the inner server.
+pub fn run_list(json: bool) -> Result<(), Box<dyn Error>> {
+    let config = load_config()?;
+    let folders = load_project_paths(&config)
+        .and_then(get_folders)
+        .unwrap_or_default();
+    let sessions = tmux::get_sessions_on(Socket::Inner);
+    let panes = tmux::list_agent_entries(Socket::Inner, None);
+    let list = remote::build_list_output(&folders, &sessions, &panes);
+    if json {
+        println!("{}", serde_json::to_string(&list)?);
+    } else {
+        for p in &list.projects {
+            let mark = if p.session_exists { "*" } else { " " };
+            println!("{mark}{}\t{}", p.name, p.path);
+        }
+        for p in &list.panes {
+            println!("{}\t{}\t{}", p.session, p.state.as_str(), p.msg);
+        }
+    }
+    Ok(())
+}
+
+/// `finter attach`: runs on the remote machine and execs into the inner tmux server.
+pub fn run_attach(name: &str, term: bool) -> Result<(), Box<dyn Error>> {
+    let config = load_config()?;
+    let folders = get_folders(load_project_paths(&config)?)?;
+    let path = remote::find_project_path(&folders, name)
+        .ok_or_else(|| format!("Err: project `{name}` not found in configured roots"))?;
+    remote::exec_attach(name, term, path)
 }

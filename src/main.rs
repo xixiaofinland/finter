@@ -21,6 +21,18 @@ enum Command {
         /// Agent that sends the hook; only `claude` is supported
         agent: String,
     },
+    /// Print this machine's projects and agent panes (inner tmux server)
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Attach to (or create) the inner tmux session for a project; run on the remote host
+    Attach {
+        name: String,
+        /// Use the terminal session `<name>~term`
+        #[arg(long)]
+        term: bool,
+    },
 }
 
 // --------------------------------------------------
@@ -40,6 +52,8 @@ fn run(args: Args) -> finter::MyResult<()> {
             finter::run_hook(&agent);
             Ok(())
         }
+        (Some(Command::List { json }), _) => finter::run_list(json),
+        (Some(Command::Attach { name, term }), _) => finter::run_attach(&name, term),
         (None, None) => finter::run_finter(),
         (None, Some(directories)) => finter::save_paths(&directories),
     }
