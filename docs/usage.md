@@ -93,7 +93,7 @@ Both attach to sessions `recap` and `recap~term` on a dedicated tmux server (`tm
 | Event | State |
 | --- | --- |
 | `UserPromptSubmit`, `PreToolUse` | `working` (no write if already working) |
-| `Notification` | `asking`, message = notification text |
+| `Notification` | `asking`, message = notification text (`idle_prompt` is ignored) |
 | `Stop` | `done`, message = last assistant text (about 60 chars) |
 | `SessionEnd` | all `@agent_*` options removed |
 

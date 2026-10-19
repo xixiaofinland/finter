@@ -94,4 +94,4 @@ Remote project without a local wrapper:
 
 - Folder-name collisions across roots can map to the same session name.
 - Only immediate subdirectories are considered projects.
-- `Notification` always means `asking`, including Claude's idle reminder.
+- `Notification` means `asking`, except `notification_type: idle_prompt`, which is ignored so a finished turn stays `done`.

@@ -19,6 +19,8 @@ pub(crate) struct HookInput {
     #[serde(default)]
     pub(crate) message: Option<String>,
     #[serde(default)]
+    pub(crate) notification_type: Option<String>,
+    #[serde(default)]
     pub(crate) transcript_path: Option<String>,
 }
 
@@ -30,7 +32,11 @@ pub(crate) enum Plan {
 }
 
 /// Map a hook event to a pane update, given the pane's current state.
-pub(crate) fn decide(event: &str, current: Option<AgentState>) -> Plan {
+pub(crate) fn decide(
+    event: &str,
+    notification_type: Option<&str>,
+    current: Option<AgentState>,
+) -> Plan {
     match event {
         "UserPromptSubmit" | "PreToolUse" => {
             if current == Some(AgentState::Working) {
@@ -39,6 +45,8 @@ pub(crate) fn decide(event: &str, current: Option<AgentState>) -> Plan {
                 Plan::Set(AgentState::Working)
             }
         }
+        // Claude's idle reminder arrives after Stop; it must not turn `done` into `asking`.
+        "Notification" if notification_type == Some("idle_prompt") => Plan::Skip,
         "Notification" => Plan::Set(AgentState::Asking),
         "Stop" => Plan::Set(AgentState::Done),
         "SessionEnd" => Plan::Clear,
@@ -143,7 +151,11 @@ fn try_hook(agent: &str) -> Result<(), Box<dyn std::error::Error>> {
         "UserPromptSubmit" | "PreToolUse" => current_state(&pane),
         _ => None,
     };
-    match decide(&input.hook_event_name, current) {
+    match decide(
+        &input.hook_event_name,
+        input.notification_type.as_deref(),
+        current,
+    ) {
         Plan::Skip => {}
         Plan::Clear => {
             tmux::run_owned(Socket::Default, &tmux::clear_args(&pane));
@@ -182,7 +194,10 @@ mod tests {
 
     #[test]
     fn hook_json_maps_to_states() {
-        let ev = |json: &str, cur| decide(&parse(json).hook_event_name, cur);
+        let ev = |json: &str, cur| {
+            let i = parse(json);
+            decide(&i.hook_event_name, i.notification_type.as_deref(), cur)
+        };
         assert_eq!(
             ev(
                 r#"{"hook_event_name":"UserPromptSubmit","prompt":"hi"}"#,
@@ -210,11 +225,31 @@ mod tests {
     }
 
     #[test]
+    fn idle_prompt_notification_keeps_done() {
+        let ev = |json: &str| {
+            let i = parse(json);
+            decide(
+                &i.hook_event_name,
+                i.notification_type.as_deref(),
+                Some(AgentState::Done),
+            )
+        };
+        let idle = r#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#;
+        assert_eq!(ev(idle), Plan::Skip);
+        let perm = r#"{"hook_event_name":"Notification","notification_type":"permission_prompt"}"#;
+        assert_eq!(ev(perm), Plan::Set(AgentState::Asking));
+        assert_eq!(
+            ev(r#"{"hook_event_name":"Notification"}"#),
+            Plan::Set(AgentState::Asking)
+        );
+    }
+
+    #[test]
     fn working_write_is_skipped_when_already_working() {
         for event in ["UserPromptSubmit", "PreToolUse"] {
-            assert_eq!(decide(event, Some(AgentState::Working)), Plan::Skip);
+            assert_eq!(decide(event, None, Some(AgentState::Working)), Plan::Skip);
             assert_eq!(
-                decide(event, Some(AgentState::Done)),
+                decide(event, None, Some(AgentState::Done)),
                 Plan::Set(AgentState::Working)
             );
         }
