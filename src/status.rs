@@ -86,7 +86,18 @@ fn load_config_quiet() -> Option<Config> {
 }
 
 /// `finter status`: print the status-bar segment.
-pub fn run_status() {
+/// `--current` wins; otherwise ask tmux, but only when running inside it.
+pub(crate) fn resolve_current(
+    arg: Option<&str>,
+    fallback: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    match arg.filter(|a| !a.is_empty()) {
+        Some(name) => Some(name.to_string()),
+        None => fallback(),
+    }
+}
+
+pub fn run_status(current_arg: Option<&str>) {
     let config = load_config_quiet();
     let (entries, hosts) = gather(config.as_ref());
     let offline: Vec<String> = hosts
@@ -94,7 +105,9 @@ pub fn run_status() {
         .filter(|h| h.offline)
         .map(|h| h.host.name.clone())
         .collect();
-    let current = std::env::var_os("TMUX").and_then(|_| tmux::get_current_session());
+    let current = resolve_current(current_arg, || {
+        std::env::var_os("TMUX").and_then(|_| tmux::get_current_session())
+    });
     print!("{}", render_status(&entries, &offline, current.as_deref()));
     let _ = std::io::stdout().flush();
 }
@@ -437,6 +450,16 @@ mod tests {
             e(None, "x~term", AgentState::Done, 2),
         ];
         assert_eq!(render_status(&v, &[], None).matches('✅').count(), 1);
+    }
+
+    #[test]
+    fn current_arg_overrides_tmux_lookup() {
+        let never = || -> Option<String> { panic!("must not ask tmux") };
+        assert_eq!(resolve_current(Some("a"), never).as_deref(), Some("a"));
+        let from_tmux = || Some("t".to_string());
+        assert_eq!(resolve_current(None, from_tmux).as_deref(), Some("t"));
+        assert_eq!(resolve_current(Some(""), from_tmux).as_deref(), Some("t"));
+        assert_eq!(resolve_current(None, || None), None);
     }
 
     #[test]

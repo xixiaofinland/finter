@@ -30,7 +30,7 @@ bind C-o display-popup -w 80% -h 80% -E "finter"
 
 ```tmux
 # status bar: waiting agents (empty when nothing is waiting)
-set -g status-right "#(finter status) %H:%M"
+set -g status-right "#(finter status --current '#{session_name}') %H:%M"
 set -g status-interval 5
 
 # jump to the oldest asking agent, then the oldest done one

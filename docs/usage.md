@@ -7,7 +7,7 @@
 | `finter` | Run the picker |
 | `finter -d <ABS_PATH> [ABS_PATH ...]` | Save project roots |
 | `finter hook claude` | Record Claude Code state in the current tmux pane (stdin: hook JSON) |
-| `finter status` | Print the status-bar segment (waiting agents on this machine and hosts) |
+| `finter status [--current <name>]` | Print the status-bar segment (waiting agents on this machine and hosts); `--current` names the session to leave out, default: ask tmux |
 | `finter next` | Jump to the oldest asking agent, then the oldest done one |
 | `finter seen` | Clear `done` for the current and previous session |
 | `finter preview <target>` | Print recent pane output (picker preview) |

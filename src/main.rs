@@ -22,7 +22,11 @@ enum Command {
         agent: String,
     },
     /// Print the tmux status-bar segment with waiting agents
-    Status,
+    Status {
+        /// Session the client is viewing (use `#{session_name}` in tmux); it is never badged
+        #[arg(long)]
+        current: Option<String>,
+    },
     /// Jump to the oldest asking agent, then the oldest done one
     Next,
     /// Clear `done` badges for the current and previous session
@@ -62,8 +66,8 @@ fn run(args: Args) -> finter::MyResult<()> {
             finter::run_hook(&agent);
             Ok(())
         }
-        (Some(Command::Status), _) => {
-            finter::run_status();
+        (Some(Command::Status { current }), _) => {
+            finter::run_status(current.as_deref());
             Ok(())
         }
         (Some(Command::Next), _) => {
