@@ -3,8 +3,8 @@ roots = [
     "/home/username/work",
 ]
 
-[ssh]
-session_name = "ssh_mac_mini"
-primary = "user@192.168.1.200"
-# Optional Tailscale fallback target
-# tailscale = "user@macmini.tailnet.ts.net"
+# Remote machines whose finter sessions appear as `<name>/<project>` in the picker.
+# `ssh` is an alias from ~/.ssh/config (or user@host); finter must be on the remote PATH.
+[[hosts]]
+name = "mini"
+ssh = "mac-mini"

@@ -15,6 +15,7 @@ home = "0.5.5"
 clap = { version = "4.4.4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+serde_json = "1.0.154"
 
 [dev-dependencies]
 assert_cmd = "2"

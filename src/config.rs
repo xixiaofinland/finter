@@ -8,7 +8,10 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) roots_config: Vec<RootConfig>,
     #[serde(default)]
-    pub(crate) ssh: Option<SshConfig>,
+    pub(crate) hosts: Vec<HostConfig>,
+    // Legacy `[ssh]` table: kept only so parsing can reject it with a migration hint.
+    #[serde(default, skip_serializing)]
+    pub(crate) ssh: Option<toml::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,17 +35,13 @@ impl RootConfig {
     }
 }
 
-pub(crate) fn default_ssh_remote_session_name() -> Option<String> {
-    Some("mac_mini".to_string())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct SshConfig {
-    pub(crate) session_name: String,
-    pub(crate) primary: String,
-    pub(crate) tailscale: Option<String>,
-    #[serde(default = "default_ssh_remote_session_name")]
-    pub(crate) remote_session_name: Option<String>,
+/// A remote machine whose finter sessions are listed and attached over ssh.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct HostConfig {
+    /// Short label shown in the picker and used as local session prefix (`mini/X`).
+    pub(crate) name: String,
+    /// ssh alias or target passed verbatim to `ssh`.
+    pub(crate) ssh: String,
 }
 
 pub fn save_paths(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -53,6 +52,7 @@ pub fn save_paths(args: &[String]) -> Result<(), Box<dyn Error>> {
         Config {
             roots: Vec::new(),
             roots_config: Vec::new(),
+            hosts: Vec::new(),
             ssh: None,
         }
     };
@@ -104,14 +104,40 @@ pub(crate) fn get_config_file_path() -> String {
 }
 
 pub(crate) fn parse_config(content: &str) -> Result<Config, Box<dyn Error>> {
-    Ok(toml::from_str(content)?)
+    let config: Config = toml::from_str(content)?;
+    if config.ssh.is_some() {
+        return Err("the `[ssh]` table is no longer supported; migrate to `[[hosts]]` with `name = \"mini\"` and `ssh = \"<ssh alias>\"`".into());
+    }
+    for host in &config.hosts {
+        validate_host(host)?;
+    }
+    Ok(config)
+}
+
+fn validate_host(host: &HostConfig) -> Result<(), Box<dyn Error>> {
+    let bad_name = host.name.is_empty()
+        || host
+            .name
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '/' | ':' | '.'));
+    if bad_name {
+        return Err(format!(
+            "invalid host name `{}`: use a non-empty name without whitespace, `/`, `:` or `.`",
+            host.name
+        )
+        .into());
+    }
+    if host.ssh.trim().is_empty() {
+        return Err(format!("host `{}` has an empty `ssh` value", host.name).into());
+    }
+    Ok(())
 }
 
 pub(crate) fn load_config() -> Result<Config, Box<dyn Error>> {
     let config_file_location = get_config_file_path();
     let file_content = fs::read_to_string(&config_file_location).map_err(|_| {
         format!(
-            "Err: config file is missing. create `{}` with roots/ssh settings or run `finter -d <ABS_PATH> ...` first.",
+            "Err: config file is missing. create `{}` with roots/hosts settings or run `finter -d <ABS_PATH> ...` first.",
             config_file_location
         )
     })?;
@@ -196,49 +222,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_config_allows_no_ssh_section() {
-        let content = r#"roots = ["/tmp"]"#;
-        let cfg = parse_config(content).expect("config should parse without ssh");
-        assert!(cfg.ssh.is_none());
-    }
-
-    #[test]
-    fn parse_config_reads_roots_and_ssh() {
+    fn parse_config_reads_hosts() {
         let content = r#"
-roots = ["/work/a", "/work/b"]
+roots = ["/tmp"]
 
-[ssh]
-session_name = "ssh_mac_mini"
-primary = "xixiao@192.168.1.113"
-tailscale = "xixiao@macmini.tailnet.ts.net"
-remote_session_name = "mac_mini"
+[[hosts]]
+name = "mini"
+ssh = "mac-mini"
 "#;
-
         let cfg = parse_config(content).expect("config should parse");
-        assert_eq!(cfg.roots.len(), 2);
-        let ssh = cfg.ssh.expect("ssh should be present");
-        assert_eq!(ssh.session_name, "ssh_mac_mini");
-        assert_eq!(ssh.primary, "xixiao@192.168.1.113");
         assert_eq!(
-            ssh.tailscale,
-            Some("xixiao@macmini.tailnet.ts.net".to_string())
+            cfg.hosts,
+            vec![HostConfig {
+                name: "mini".to_string(),
+                ssh: "mac-mini".to_string()
+            }]
         );
-        assert_eq!(ssh.remote_session_name, Some("mac_mini".to_string()));
     }
 
     #[test]
-    fn parse_config_defaults_remote_session_name_when_missing() {
+    fn parse_config_allows_no_hosts() {
+        let cfg = parse_config(r#"roots = ["/tmp"]"#).expect("config should parse");
+        assert!(cfg.hosts.is_empty());
+    }
+
+    #[test]
+    fn parse_config_rejects_legacy_ssh_table() {
         let content = r#"
-roots = ["/work/a"]
+roots = ["/tmp"]
 
 [ssh]
 session_name = "ssh_mac_mini"
 primary = "xixiao@192.168.1.113"
 "#;
+        let err = parse_config(content).expect_err("legacy [ssh] must be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("[ssh]"), "{msg}");
+        assert!(msg.contains("[[hosts]]"), "{msg}");
+    }
 
-        let cfg = parse_config(content).expect("config should parse");
-        let ssh = cfg.ssh.expect("ssh should be present");
-        assert_eq!(ssh.remote_session_name, Some("mac_mini".to_string()));
+    #[test]
+    fn parse_config_rejects_bad_host_names() {
+        for name in ["", "a/b", "a b", "a:b", "a.b"] {
+            let content = format!("[[hosts]]\nname = \"{name}\"\nssh = \"x\"\n");
+            assert!(parse_config(&content).is_err(), "name {name:?} accepted");
+        }
+        let content = "[[hosts]]\nname = \"mini\"\nssh = \" \"\n";
+        assert!(parse_config(content).is_err());
     }
 
     #[test]
@@ -251,10 +281,6 @@ mode = "children"
 [[roots_config]]
 path = "/home/finxxi/notes"
 mode = "direct"
-
-[ssh]
-session_name = "ssh_mac_mini"
-primary = "xixiao@192.168.1.113"
 "#;
 
         let cfg = parse_config(content).expect("config should parse");
@@ -267,7 +293,7 @@ primary = "xixiao@192.168.1.113"
     }
 
     #[test]
-    fn parse_config_reads_roots_config_without_ssh() {
+    fn parse_config_reads_roots_config() {
         let content = r#"
 [[roots_config]]
 path = "/home/finxxi/Projects"
@@ -276,7 +302,6 @@ mode = "children"
 
         let cfg = parse_config(content).expect("config should parse");
         assert_eq!(cfg.roots_config.len(), 1);
-        assert!(cfg.ssh.is_none());
     }
 
     #[test]
@@ -299,10 +324,6 @@ roots = ["/home/finxxi/legacy"]
 [[roots_config]]
 path = "/home/finxxi/notes"
 mode = "direct"
-
-[ssh]
-session_name = "ssh_mac_mini"
-primary = "xixiao@192.168.1.113"
 "#;
 
         let cfg = parse_config(content).expect("config should parse");
@@ -310,22 +331,6 @@ primary = "xixiao@192.168.1.113"
         assert_eq!(cfg.roots_config.len(), 1);
         assert_eq!(cfg.roots_config[0].path, "/home/finxxi/notes");
         assert_eq!(cfg.roots_config[0].mode(), RootMode::Direct);
-    }
-
-    #[test]
-    fn parse_config_merges_legacy_roots_and_roots_config_without_ssh() {
-        let content = r#"
-roots = ["/home/finxxi/legacy"]
-
-[[roots_config]]
-path = "/home/finxxi/notes"
-mode = "direct"
-"#;
-
-        let cfg = parse_config(content).expect("config should parse");
-        assert_eq!(cfg.roots.len(), 1);
-        assert_eq!(cfg.roots_config.len(), 1);
-        assert!(cfg.ssh.is_none());
     }
 
     #[test]
