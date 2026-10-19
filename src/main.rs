@@ -30,7 +30,11 @@ enum Command {
     /// Jump to the oldest asking agent, then the oldest done one
     Next,
     /// Clear `done` badges for the current and previous session
-    Seen,
+    Seen {
+        /// Also clear the session the client came from (for `client-session-changed`)
+        #[arg(long)]
+        leave: bool,
+    },
     /// Show recent output of a session (used by the picker preview)
     Preview { target: String },
     /// Enter copy mode in the remote tmux behind the current pane
@@ -74,8 +78,8 @@ fn run(args: Args) -> finter::MyResult<()> {
             finter::run_next();
             Ok(())
         }
-        (Some(Command::Seen), _) => {
-            finter::run_seen();
+        (Some(Command::Seen { leave }), _) => {
+            finter::run_seen(leave);
             Ok(())
         }
         (Some(Command::Preview { target }), _) => {

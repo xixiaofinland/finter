@@ -171,10 +171,12 @@ pub fn run_next() {
 
 // ── seen
 
-/// Sessions whose `done` badge should clear: where the client is and where it came from.
-pub(crate) fn sessions_to_clear(current: &str, last: &str) -> Vec<String> {
+/// Sessions whose `done` badge should clear: the one being viewed and, only when
+/// `leave` is set (session switch), the one the client came from.
+pub(crate) fn sessions_to_clear(current: &str, last: &str, leave: bool) -> Vec<String> {
+    let candidates: &[&str] = if leave { &[current, last] } else { &[current] };
     let mut out = Vec::new();
-    for s in [current, last] {
+    for s in candidates.iter().copied() {
         if !s.is_empty() && !out.iter().any(|o| o == s) {
             out.push(s.to_string());
         }
@@ -192,7 +194,7 @@ pub(crate) fn parse_wrapper<'a>(
     Some((host, project))
 }
 
-/// Remote tmux argv that unsets `@agent_*` on each pane, but only while it is still `done`.
+/// tmux argv (local or remote) that unsets `@agent_*` on each pane, but only while it is still `done`.
 pub(crate) fn remote_clear_args(panes: &[&str]) -> Vec<String> {
     let unset = tmux::AGENT_OPTIONS
         .iter()
@@ -246,14 +248,20 @@ fn clear_remote_done(host: &HostConfig, project: &str) {
 }
 
 fn clear_local_done(session: &str) {
-    for e in tmux::list_agent_entries(Socket::Default, None) {
-        if e.session == session && e.state == AgentState::Done {
-            tmux::run_owned(Socket::Default, &tmux::clear_args(&e.pane_id));
-        }
+    let panes: Vec<String> = tmux::list_agent_entries(Socket::Default, None)
+        .into_iter()
+        .filter(|e| e.session == session && e.state == AgentState::Done)
+        .map(|e| e.pane_id)
+        .collect();
+    if panes.is_empty() {
+        return;
     }
+    // Conditional per pane, so an `asking` that appears in between is never wiped.
+    let refs: Vec<&str> = panes.iter().map(String::as_str).collect();
+    tmux::run_owned(Socket::Default, &remote_clear_args(&refs));
 }
 
-pub fn run_seen() {
+pub fn run_seen(leave: bool) {
     let Some(info) = tmux::stdout_of(
         Socket::Default,
         &[
@@ -266,7 +274,7 @@ pub fn run_seen() {
     };
     let (current, last) = info.split_once('\t').unwrap_or((info.as_str(), ""));
     let hosts = load_config_quiet().map(|c| c.hosts).unwrap_or_default();
-    for session in sessions_to_clear(current, last) {
+    for session in sessions_to_clear(current, last, leave) {
         match parse_wrapper(&session, &hosts) {
             Some((host, project)) => clear_remote_done(host, project),
             None => clear_local_done(&session),
@@ -464,10 +472,11 @@ mod tests {
 
     #[test]
     fn seen_targets_current_and_previous_once() {
-        assert_eq!(sessions_to_clear("a", "b"), ["a", "b"]);
-        assert_eq!(sessions_to_clear("a", "a"), ["a"]);
-        assert_eq!(sessions_to_clear("a", ""), ["a"]);
-        assert!(sessions_to_clear("", "").is_empty());
+        assert_eq!(sessions_to_clear("a", "b", true), ["a", "b"]);
+        assert_eq!(sessions_to_clear("a", "b", false), ["a"]);
+        assert_eq!(sessions_to_clear("a", "a", true), ["a"]);
+        assert_eq!(sessions_to_clear("a", "", true), ["a"]);
+        assert!(sessions_to_clear("", "", true).is_empty());
     }
 
     #[test]

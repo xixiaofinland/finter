@@ -9,7 +9,7 @@
 | `finter hook claude` | Record Claude Code state in the current tmux pane (stdin: hook JSON) |
 | `finter status [--current <name>]` | Print the status-bar segment (waiting agents on this machine and hosts); `--current` names the session to leave out, default: ask tmux |
 | `finter next` | Jump to the oldest asking agent, then the oldest done one |
-| `finter seen` | Clear `done` for the current and previous session |
+| `finter seen [--leave]` | Clear `done` for the current session; with `--leave` also the previous one |
 | `finter preview <target>` | Print recent pane output (picker preview) |
 | `finter copy-mode` | Enter copy mode in the remote tmux behind the current pane |
 | `finter list [--json]` | Print this machine's projects and agent panes (run over ssh by other hosts) |

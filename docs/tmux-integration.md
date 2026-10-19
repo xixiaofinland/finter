@@ -36,8 +36,8 @@ set -g status-interval 5
 # jump to the oldest asking agent, then the oldest done one
 bind a run-shell -b "finter next"
 
-# clear `done` when entering or leaving a session
-set-hook -g client-session-changed 'run-shell -b "finter seen"'
+# clear `done` on the session you enter; on a session switch also on the one you leave
+set-hook -g client-session-changed 'run-shell -b "finter seen --leave"'
 set-hook -g pane-focus-in 'run-shell -b "finter seen"'
 
 # copy mode: panes that show a remote session enter copy mode on the remote tmux
