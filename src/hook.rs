@@ -24,6 +24,25 @@ pub(crate) struct HookInput {
     pub(crate) notification_type: Option<String>,
     #[serde(default)]
     pub(crate) transcript_path: Option<String>,
+    #[serde(default)]
+    pub(crate) last_assistant_message: Option<String>,
+}
+
+/// Claude's final reply for a Stop event. Prefer the field Claude Code sends,
+/// since the transcript may not be flushed yet when the hook runs; fall back to
+/// the transcript tail for versions that lack it.
+fn done_text(input: &HookInput) -> Option<String> {
+    input
+        .last_assistant_message
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .or_else(|| {
+            input
+                .transcript_path
+                .as_deref()
+                .and_then(|p| read_tail(p, TRANSCRIPT_TAIL_BYTES).ok())
+                .and_then(|t| last_assistant_text(&t))
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,12 +195,7 @@ fn try_hook(agent: &str) -> Result<(), Box<dyn std::error::Error>> {
                     .message
                     .as_deref()
                     .map(|m| summarize(m, MSG_MAX_CHARS)),
-                AgentState::Done => input
-                    .transcript_path
-                    .as_deref()
-                    .and_then(|p| read_tail(p, TRANSCRIPT_TAIL_BYTES).ok())
-                    .and_then(|t| last_assistant_text(&t))
-                    .map(|t| summarize(&t, MSG_MAX_CHARS)),
+                AgentState::Done => done_text(&input).map(|t| summarize(&t, MSG_MAX_CHARS)),
                 AgentState::Working => None,
             }
             .unwrap_or_default();
@@ -279,6 +293,17 @@ mod tests {
     fn transcript_tail_yields_last_assistant_text() {
         let text = last_assistant_text(TRANSCRIPT).expect("text");
         assert!(text.starts_with("All done"), "{text}");
+    }
+
+    #[test]
+    fn done_text_prefers_last_assistant_message() {
+        let input = parse(
+            r#"{"hook_event_name":"Stop","last_assistant_message":"hello there","transcript_path":"/nonexistent"}"#,
+        );
+        assert_eq!(done_text(&input).as_deref(), Some("hello there"));
+
+        let input = parse(r#"{"hook_event_name":"Stop","last_assistant_message":"  "}"#);
+        assert_eq!(done_text(&input), None);
     }
 
     #[test]
