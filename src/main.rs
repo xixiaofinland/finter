@@ -39,6 +39,8 @@ enum Command {
     Preview { target: String },
     /// Enter copy mode in the remote tmux behind the current pane
     CopyMode,
+    /// Kill the current session; for a remote project also its sessions on the host
+    Kill,
     /// Print this machine's projects and agent panes (inner tmux server)
     List {
         #[arg(long)]
@@ -88,6 +90,10 @@ fn run(args: Args) -> finter::MyResult<()> {
         }
         (Some(Command::CopyMode), _) => {
             finter::run_copy_mode();
+            Ok(())
+        }
+        (Some(Command::Kill), _) => {
+            finter::run_kill();
             Ok(())
         }
         (Some(Command::List { json }), _) => finter::run_list(json),

@@ -42,6 +42,9 @@ set-hook -g pane-focus-in 'run-shell -b "finter seen"'
 
 # copy mode: panes that show a remote session enter copy mode on the remote tmux
 bind [ if -F '#{@finter_remote}' 'run-shell -b "finter copy-mode"' 'copy-mode'
+
+# kill the current session; for a remote project also its sessions on the host
+bind x run-shell "finter kill"
 ```
 
 `pane-focus-in` needs `set -g focus-events on`.

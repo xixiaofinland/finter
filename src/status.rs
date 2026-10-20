@@ -412,6 +412,53 @@ pub fn run_copy_mode() {
     }
 }
 
+// ── kill
+
+/// Remote shell command killing each inner session; ones already gone are not an error.
+pub(crate) fn kill_inner_cmd(sessions: &[&str]) -> String {
+    let mut cmds: Vec<String> = sessions
+        .iter()
+        .map(|s| remote::remote_tmux(&["kill-session", "-t", &format!("={s}")]))
+        .collect();
+    cmds.push("true".to_string());
+    cmds.join("; ")
+}
+
+/// Leave the current session and kill it, together with the inner sessions
+/// behind its wrapper panes: killing a wrapper means being done with the project.
+pub fn run_kill() {
+    let Some(session) = tmux::get_current_session() else {
+        return;
+    };
+    let mut inner: Vec<(String, String)> = tmux::list_pane_rows(Socket::Default)
+        .into_iter()
+        .filter(|p| p.session == session)
+        .filter_map(|p| {
+            remote::split_remote_tag(&p.remote).map(|(a, s)| (a.to_string(), s.to_string()))
+        })
+        .collect();
+    inner.sort();
+    inner.dedup();
+
+    // Switch first: killing the inner sessions ends the wrapper's windows, and a
+    // client left on a destroyed session would detach.
+    tmux::run_on(Socket::Default, &["switch-client", "-n"]);
+    let mut aliases: Vec<&str> = inner.iter().map(|(a, _)| a.as_str()).collect();
+    aliases.dedup();
+    for alias in aliases {
+        let sessions: Vec<&str> = inner
+            .iter()
+            .filter(|(a, _)| a == alias)
+            .map(|(_, s)| s.as_str())
+            .collect();
+        if let Err(e) = remote::ssh_run(alias, &kill_inner_cmd(&sessions)) {
+            eprintln!("finter kill: {alias}: {e}");
+        }
+    }
+    let target = format!("={session}");
+    tmux::run_on(Socket::Default, &["kill-session", "-t", &target]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,5 +631,16 @@ mod tests {
         assert_eq!(tail_lines(text, 2), "b\nc");
         assert_eq!(tail_lines(text, 10), "a\nb\nc");
         assert_eq!(tail_lines("", 5), "");
+    }
+
+    #[test]
+    fn kill_inner_cmd_kills_each_session_exactly_and_tolerates_missing_ones() {
+        let tmux = format!("tmux -L {}", tmux::shell_quote(&tmux::inner_socket_name()));
+        assert_eq!(
+            kill_inner_cmd(&["recap", "recap~term"]),
+            format!(
+                "{tmux} 'kill-session' '-t' '=recap'; {tmux} 'kill-session' '-t' '=recap~term'; true"
+            )
+        );
     }
 }

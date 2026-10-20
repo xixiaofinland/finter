@@ -24,14 +24,14 @@
 finter/
 ├── .github/workflows/publish.yml  # Auto-publish to crates.io on version change
 ├── src/
-│   ├── main.rs      # clap CLI: -d and subcommands (hook, status, next, seen, preview, copy-mode, list, attach)
+│   ├── main.rs      # clap CLI: -d and subcommands (hook, status, next, seen, preview, copy-mode, kill, list, attach)
 │   ├── lib.rs       # glue: picker flow, list, attach
 │   ├── config.rs    # ~/.finter.toml: roots, [[hosts]], folder scanning
 │   ├── tmux.rs      # tmux runner (default server and `-L finter`), pane listing, option argv builders
 │   ├── state.rs     # AgentState, AgentEntry, ordering, next selection, age format
 │   ├── hook.rs      # `finter hook claude`, transcript tail
 │   ├── remote.rs    # list --json schema, ssh + cache, attach, wrapper session, inner.conf use
-│   ├── status.rs    # status, next, seen, preview, copy-mode
+│   ├── status.rs    # status, next, seen, preview, copy-mode, kill
 │   ├── picker.rs    # picker rows + skim
 │   └── inner.conf   # tmux config for the remote `-L finter` server (include_str!)
 ├── tests/fixtures/transcript.jsonl  # Claude transcript sample for hook tests
