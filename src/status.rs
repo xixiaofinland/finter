@@ -176,17 +176,33 @@ pub fn run_next() {
 
 // ── seen
 
-/// Sessions whose `done` badge should clear: the one being viewed and, only when
-/// `leave` is set (session switch), the one the client came from.
-pub(crate) fn sessions_to_clear(current: &str, last: &str, leave: bool) -> Vec<String> {
-    let candidates: &[&str] = if leave { &[current, last] } else { &[current] };
-    let mut out = Vec::new();
-    for s in candidates.iter().copied() {
-        if !s.is_empty() && !out.iter().any(|o| o == s) {
-            out.push(s.to_string());
-        }
+/// What a focus change does to one session's agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SeenAction {
+    /// The session being viewed: its `done` is acknowledged.
+    View,
+    /// The session just left: `done` is acknowledged as well, and an `asking`
+    /// the user saw but did not answer (e.g. interrupted the prompt, which fires
+    /// no hook) is demoted to `done`, so a reminder stays behind.
+    Leave,
+}
+
+/// Sessions to update: the one being viewed and, only when `leave` is set
+/// (session switch), the one the client came from.
+pub(crate) fn seen_targets(current: &str, last: &str, leave: bool) -> Vec<(String, SeenAction)> {
+    let mut out: Vec<(String, SeenAction)> = Vec::new();
+    if !current.is_empty() {
+        out.push((current.to_string(), SeenAction::View));
+    }
+    if leave && !last.is_empty() && last != current {
+        out.push((last.to_string(), SeenAction::Leave));
     }
     out
+}
+
+/// States a seen action touches.
+fn affected(state: AgentState, action: SeenAction) -> bool {
+    state == AgentState::Done || (action == SeenAction::Leave && state == AgentState::Asking)
 }
 
 /// Split a wrapper session name into its configured host and project.
@@ -199,71 +215,87 @@ pub(crate) fn parse_wrapper<'a>(
     Some((host, project))
 }
 
-/// tmux argv (local or remote) that unsets `@agent_*` on each pane, but only while it is still `done`.
-pub(crate) fn remote_clear_args(panes: &[&str]) -> Vec<String> {
+/// tmux argv (local or remote) applying `action` to each pane. Every change is
+/// conditional on the pane's state at execution time, so a transition that
+/// happens in between is never overwritten. `done` is cleared before `asking`
+/// is demoted, so a demoted pane keeps its `done`.
+pub(crate) fn seen_args(panes: &[&str], action: SeenAction) -> Vec<String> {
     let unset = tmux::AGENT_OPTIONS
         .iter()
         .map(|o| format!("set-option -pu -q {o}"))
         .collect::<Vec<_>>()
         .join(" ; ");
+    let mut steps: Vec<(&str, String)> = vec![("done", unset)];
+    if action == SeenAction::Leave {
+        steps.push(("asking", "set-option -p -q @agent_state done".to_string()));
+    }
     let mut args: Vec<String> = Vec::new();
-    for (i, pane) in panes.iter().enumerate() {
-        if i > 0 {
-            args.push(";".to_string());
+    for pane in panes {
+        for (state, cmd) in &steps {
+            if !args.is_empty() {
+                args.push(";".to_string());
+            }
+            args.extend([
+                "if-shell".to_string(),
+                "-F".to_string(),
+                "-t".to_string(),
+                pane.to_string(),
+                format!("#{{==:#{{@agent_state}},{state}}}"),
+                cmd.clone(),
+            ]);
         }
-        args.extend(
-            [
-                "if-shell",
-                "-F",
-                "-t",
-                pane,
-                "#{==:#{@agent_state},done}",
-                &unset,
-            ]
-            .map(String::from),
-        );
     }
     args
 }
 
-fn clear_remote_done(host: &HostConfig, project: &str) {
+fn seen_remote(host: &HostConfig, project: &str, action: SeenAction) {
     let Some(mut cache) = remote::read_cache(&host.name) else {
         return;
     };
     let Some(data) = cache.data.as_mut() else {
         return;
     };
-    let done: Vec<String> = data
+    let mine =
+        |p: &remote::ListPane| project_of(&p.session) == project && affected(p.state, action);
+    let panes: Vec<String> = data
         .panes
         .iter()
-        .filter(|p| p.state == AgentState::Done && project_of(&p.session) == project)
+        .filter(|p| mine(p))
         .map(|p| p.pane.clone())
         .collect();
-    if done.is_empty() {
+    if panes.is_empty() {
         return;
     }
+    // Reflect the change locally right away; the remote write is fire-and-forget.
     data.panes
-        .retain(|p| !(p.state == AgentState::Done && project_of(&p.session) == project));
-    // Reflect the clear locally right away; the remote write is fire-and-forget.
+        .retain(|p| !(mine(p) && p.state == AgentState::Done));
+    for p in data
+        .panes
+        .iter_mut()
+        .filter(|p| project_of(&p.session) == project)
+    {
+        if p.state == AgentState::Asking && action == SeenAction::Leave {
+            p.state = AgentState::Done;
+        }
+    }
     remote::write_cache(&host.name, &cache);
-    let refs: Vec<&str> = done.iter().map(String::as_str).collect();
-    let args = remote_clear_args(&refs);
+    let refs: Vec<&str> = panes.iter().map(String::as_str).collect();
+    let args = seen_args(&refs, action);
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
     remote::ssh_spawn(&host.ssh, &remote::remote_tmux(&argv));
 }
 
-fn clear_local_done(session: &str) {
+fn seen_local(session: &str, action: SeenAction) {
     let panes: Vec<String> = tmux::list_agent_entries(Socket::Default, None)
         .into_iter()
-        .filter(|e| e.session == session && e.state == AgentState::Done)
+        .filter(|e| e.session == session && affected(e.state, action))
         .map(|e| e.pane_id)
         .collect();
     if panes.is_empty() {
         return;
     }
-    // Conditional per pane, so an `asking` that appears in between is never wiped.
     let refs: Vec<&str> = panes.iter().map(String::as_str).collect();
-    tmux::run_owned(Socket::Default, &remote_clear_args(&refs));
+    tmux::run_owned(Socket::Default, &seen_args(&refs, action));
 }
 
 pub fn run_seen(leave: bool) {
@@ -279,10 +311,10 @@ pub fn run_seen(leave: bool) {
     };
     let (current, last) = info.split_once('\t').unwrap_or((info.as_str(), ""));
     let hosts = load_config_quiet().map(|c| c.hosts).unwrap_or_default();
-    for session in sessions_to_clear(current, last, leave) {
+    for (session, action) in seen_targets(current, last, leave) {
         match parse_wrapper(&session, &hosts) {
-            Some((host, project)) => clear_remote_done(host, project),
-            None => clear_local_done(&session),
+            Some((host, project)) => seen_remote(host, project, action),
+            None => seen_local(&session, action),
         }
     }
 }
@@ -479,12 +511,22 @@ mod tests {
     }
 
     #[test]
-    fn seen_targets_current_and_previous_once() {
-        assert_eq!(sessions_to_clear("a", "b", true), ["a", "b"]);
-        assert_eq!(sessions_to_clear("a", "b", false), ["a"]);
-        assert_eq!(sessions_to_clear("a", "a", true), ["a"]);
-        assert_eq!(sessions_to_clear("a", "", true), ["a"]);
-        assert!(sessions_to_clear("", "", true).is_empty());
+    fn seen_targets_view_current_and_leave_previous() {
+        use SeenAction::*;
+        let t = |c, l, leave| seen_targets(c, l, leave);
+        assert_eq!(t("a", "b", true), [("a".into(), View), ("b".into(), Leave)]);
+        assert_eq!(t("a", "b", false), [("a".into(), View)]);
+        assert_eq!(t("a", "a", true), [("a".into(), View)]);
+        assert_eq!(t("a", "", true), [("a".into(), View)]);
+        assert!(t("", "", true).is_empty());
+    }
+
+    #[test]
+    fn only_leave_touches_asking() {
+        assert!(affected(AgentState::Done, SeenAction::View));
+        assert!(!affected(AgentState::Asking, SeenAction::View));
+        assert!(affected(AgentState::Asking, SeenAction::Leave));
+        assert!(!affected(AgentState::Working, SeenAction::Leave));
     }
 
     #[test]
@@ -500,13 +542,30 @@ mod tests {
     }
 
     #[test]
-    fn remote_clear_checks_done_per_pane() {
-        let args = remote_clear_args(&["%1", "%2"]);
-        assert_eq!(args.iter().filter(|a| *a == ";").count(), 1);
-        assert_eq!(args.iter().filter(|a| *a == "if-shell").count(), 2);
-        assert!(args
+    fn seen_args_clear_done_then_demote_asking() {
+        let view = seen_args(&["%1", "%2"], SeenAction::View);
+        assert_eq!(view.iter().filter(|a| *a == "if-shell").count(), 2);
+        assert!(!view.iter().any(|a| a.contains("asking")));
+        assert!(view
             .iter()
             .any(|a| a.contains("set-option -pu -q @agent_msg")));
+
+        let leave = seen_args(&["%1"], SeenAction::Leave);
+        let done_at = leave
+            .iter()
+            .position(|a| a == "#{==:#{@agent_state},done}")
+            .unwrap();
+        let asking_at = leave
+            .iter()
+            .position(|a| a == "#{==:#{@agent_state},asking}")
+            .unwrap();
+        assert!(
+            done_at < asking_at,
+            "done must clear before asking is demoted"
+        );
+        assert!(leave
+            .iter()
+            .any(|a| a == "set-option -p -q @agent_state done"));
     }
 
     #[test]
