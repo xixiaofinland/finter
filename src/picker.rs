@@ -202,7 +202,24 @@ pub(crate) fn get_match(key: &str, rows: Vec<Row>) -> Result<Row, Box<dyn Error>
         .ok_or_else(|| "selected value not found in projects?".into())
 }
 
-pub(crate) fn select_in_skim(rows: Vec<Row>) -> Result<String, Box<dyn Error>> {
+/// One line naming each unreachable host and why, so a host with no rows
+/// reads as "offline" rather than "not configured".
+pub(crate) fn offline_header(hosts: &[HostState]) -> Option<String> {
+    let down: Vec<String> = hosts
+        .iter()
+        .filter(|h| h.offline)
+        .map(|h| match &h.error {
+            Some(e) => format!("{} ✕ ({e})", h.host.name),
+            None => format!("{} ✕", h.host.name),
+        })
+        .collect();
+    (!down.is_empty()).then(|| down.join("  "))
+}
+
+pub(crate) fn select_in_skim(
+    rows: Vec<Row>,
+    header: Option<&str>,
+) -> Result<String, Box<dyn Error>> {
     let exe = std::env::current_exe()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "finter".to_string());
@@ -214,6 +231,7 @@ pub(crate) fn select_in_skim(rows: Vec<Row>) -> Result<String, Box<dyn Error>> {
         .color(Some("dark"))
         .preview(Some(&preview_cmd))
         .preview_window(Some("right:50%"))
+        .header(header)
         .build()?;
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
@@ -381,5 +399,16 @@ mod tests {
         let line = rows[0].line();
         assert!(line.contains('❓') && line.contains("3m") && line.contains("needs ok"));
         assert_eq!(get_match("local:a", rows).unwrap().name, "a");
+    }
+
+    #[test]
+    fn offline_header_names_down_hosts_with_reason() {
+        let up = host_state(&[], vec![], false);
+        assert_eq!(offline_header(std::slice::from_ref(&up)), None);
+
+        let mut down = host_state(&[], vec![], true);
+        down.error = Some("finter too old?".to_string());
+        let header = offline_header(&[up, down]).expect("header");
+        assert!(header.ends_with("✕ (finter too old?)"), "{header}");
     }
 }

@@ -7,7 +7,7 @@ mod status;
 mod tmux;
 
 use config::{get_folders, load_config, load_project_paths};
-use picker::{build_rows, get_match, select_in_skim, Target};
+use picker::{build_rows, get_match, offline_header, select_in_skim, Target};
 use std::error::Error;
 use tmux::{get_current_session, get_sessions, run_tmux_with_args, Socket};
 
@@ -35,7 +35,8 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
         now,
     );
 
-    let selected = select_in_skim(rows.clone())?;
+    let header = offline_header(&hosts);
+    let selected = select_in_skim(rows.clone(), header.as_deref())?;
     let row = get_match(&selected, rows)?;
 
     let session_name = match row.target {
