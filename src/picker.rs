@@ -60,10 +60,10 @@ impl Row {
             Some(a) => (format_age(age_secs(self.now, a.since)), a.msg.as_str()),
             None => (String::new(), ""),
         };
-        // Orange matches the status-left colour of a wrapper session in tmux.
-        let name_color = match self.target {
-            Target::Remote { .. } => "\x1b[38;5;208m",
-            Target::Local { .. } => "",
+        // Same colour as the wrapper session's name in the tmux status-left.
+        let name_color = match &self.target {
+            Target::Remote { host, .. } => format!("\x1b[38;5;{}m", host.color()),
+            Target::Local { .. } => String::new(),
         };
         format!(
             "{color}{icon}\x1b[0m {name_color}{}\x1b[0m{pad}  \x1b[2m{age:>4}  {msg}\x1b[0m",
@@ -274,6 +274,7 @@ mod tests {
         HostConfig {
             name: "mini".into(),
             ssh: "mac-mini".into(),
+            color: None,
         }
     }
 
@@ -407,10 +408,14 @@ mod tests {
     }
 
     #[test]
-    fn remote_row_names_are_orange() {
+    fn remote_row_names_use_host_color() {
         let hs = host_state(&[("recap", false)], vec![], false);
         let rows = build_rows(&[], &[], &[], &[hs], None, 0);
         assert!(rows[0].line().contains("\x1b[38;5;208mmini/recap\x1b[0m"));
+        let mut hs = host_state(&[("recap", false)], vec![], false);
+        hs.host.color = Some(228);
+        let rows = build_rows(&[], &[], &[], &[hs], None, 0);
+        assert!(rows[0].line().contains("\x1b[38;5;228mmini/recap"));
         let rows = build_rows(&[], &["a".into()], &[], &[], None, 0);
         assert!(!rows[0].line().contains("38;5;208"));
     }

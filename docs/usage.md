@@ -46,6 +46,7 @@ Notes:
 - Invalid or non-existing paths are ignored at load time.
 - `finter -d ...` updates the roots and keeps existing `[[hosts]]` entries.
 - Host `name` must be non-empty and free of whitespace, `/`, `:` and `.` (it becomes the session prefix `name/project`).
+- Host `color` is optional: an xterm-256 colour index (default `208`, orange) for the host's rows in the picker and `@finter_colour` on its wrapper sessions.
 - A legacy `[ssh]` table is rejected with a migration hint.
 - Legacy `~/.finter` is no longer used.
 

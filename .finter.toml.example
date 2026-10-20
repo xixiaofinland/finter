@@ -5,6 +5,9 @@ roots = [
 
 # Remote machines whose finter sessions appear as `<name>/<project>` in the picker.
 # `ssh` is an alias from ~/.ssh/config (or user@host); finter must be on the remote PATH.
+# `color` (optional, xterm-256 index, default 208) colours the host's sessions in the picker
+# and sets `@finter_colour` on its wrapper sessions for the tmux status bar.
 [[hosts]]
 name = "mini"
 ssh = "mac-mini"
+color = 228

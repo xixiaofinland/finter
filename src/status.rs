@@ -599,6 +599,7 @@ mod tests {
         let hosts = vec![HostConfig {
             name: "mini".into(),
             ssh: "mac-mini".into(),
+            color: None,
         }];
         let (h, p) = parse_wrapper("mini/recap", &hosts).unwrap();
         assert_eq!((h.ssh.as_str(), p), ("mac-mini", "recap"));

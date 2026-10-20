@@ -503,6 +503,12 @@ pub(crate) fn create_wrapper(host: &HostConfig, project: &str) -> bool {
             &["set-option", "-p", "-t", &second, "@finter_remote", &tag2],
         );
     }
+    // Read by the status-left so the session name shows in the host's colour.
+    let colour = format!("colour{}", host.color());
+    tmux::run_on(
+        Socket::Default,
+        &["set-option", "-t", &session, "@finter_colour", &colour],
+    );
     tmux::run_on(Socket::Default, &["select-window", "-t", &first]);
     true
 }
@@ -619,6 +625,7 @@ mod tests {
         let host = HostConfig {
             name: "mock".to_string(),
             ssh: "mock-alias".to_string(),
+            color: None,
         };
         let calls = std::cell::Cell::new(0);
         let ok = |_: &HostConfig| {

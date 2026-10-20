@@ -37,6 +37,7 @@ Agent-agnostic, written by hooks and read by `status`, `next`, `seen` and the pi
 | `@agent_since` | unix epoch seconds of the last state change |
 | `@agent_msg` | one-line message (about 60 chars) |
 | `@finter_remote` | on wrapper panes only: `<ssh alias>:<inner session>` |
+| `@finter_colour` | session option on wrapper sessions: `colour<N>` from the host's `color` |
 
 ## `list --json`
 
@@ -79,7 +80,7 @@ Remote project without a local wrapper:
 
 1. `tmux new-session -d -s <host>/<X> "ssh -t <alias> finter attach X"` (window 1)
 2. `tmux new-window -d -t <host>/<X>: "ssh -t <alias> finter attach X --term"` (window 2)
-3. `@finter_remote=<alias>:X` and `<alias>:X~term` set on the two panes
+3. `@finter_remote=<alias>:X` and `<alias>:X~term` set on the two panes, `@finter_colour=colour<N>` on the session
 4. select window 1, switch/attach client
 
 `finter attach X [--term]` (on the remote) resolves X's path from its own roots, writes `inner.conf`, and execs `tmux -L finter -f <conf> new-session -A -s X|X~term -c <path>`.

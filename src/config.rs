@@ -42,6 +42,15 @@ pub(crate) struct HostConfig {
     pub(crate) name: String,
     /// ssh alias or target passed verbatim to `ssh`.
     pub(crate) ssh: String,
+    /// xterm-256 colour index for this host's sessions in the picker and tmux bar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) color: Option<u8>,
+}
+
+impl HostConfig {
+    pub(crate) fn color(&self) -> u8 {
+        self.color.unwrap_or(208)
+    }
 }
 
 pub fn save_paths(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -235,9 +244,18 @@ ssh = "mac-mini"
             cfg.hosts,
             vec![HostConfig {
                 name: "mini".to_string(),
-                ssh: "mac-mini".to_string()
+                ssh: "mac-mini".to_string(),
+                color: None,
             }]
         );
+    }
+
+    #[test]
+    fn host_color_defaults_to_orange() {
+        let cfg = parse_config("[[hosts]]\nname = \"a\"\nssh = \"a\"\n\n[[hosts]]\nname = \"b\"\nssh = \"b\"\ncolor = 228\n")
+            .expect("config should parse");
+        assert_eq!(cfg.hosts[0].color(), 208);
+        assert_eq!(cfg.hosts[1].color(), 228);
     }
 
     #[test]

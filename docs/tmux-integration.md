@@ -45,6 +45,9 @@ bind [ if -F '#{@finter_remote}' 'run-shell -b "finter copy-mode"' 'copy-mode'
 
 # kill the current session; for a remote project also its sessions on the host
 bind x run-shell "finter kill"
+
+# session name in the host's colour for remote projects
+set -g status-left "#[fg=#{?@finter_colour,#{@finter_colour},white}][#{session_name}]#[default] "
 ```
 
 `pane-focus-in` needs `set -g focus-events on`.
