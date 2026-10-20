@@ -146,6 +146,10 @@ bind C-o display-popup -E "finter"   # tmux binding example
 8. ✓ Update README.md if user-facing behavior changes
 9. ✓ Push - GitHub Actions will auto-publish to crates.io
 
+Steps 5-7 and 9 are the maintainer's release step, done on master after merging. A PR (including
+one opened by an unattended agent) never bumps the version: merging a bump publishes to crates.io,
+which can't be undone.
+
 **Version bumping strategy:**
 - **Patch (0.2.x):** Bug fixes, internal refactoring
 - **Minor (0.x.0):** New features, behavior changes
