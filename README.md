@@ -54,6 +54,7 @@ roots = [
 [[hosts]]
 name = "mini"
 ssh = "mac-mini"
+color = 180 # optional xterm-256 colour for this host's sessions, default 208
 ```
 
 You can also copy the repo template: `.finter.toml.example`.
@@ -61,6 +62,7 @@ You can also copy the repo template: `.finter.toml.example`.
 Notes:
 
 - `ssh` is an alias from `~/.ssh/config` (or `user@host`); the remote needs `finter` on its non-interactive `PATH` and the same `~/.finter.toml` roots.
+- `color` tints the host's rows in the picker and is stored as `@finter_colour` on its wrapper sessions; see `docs/tmux-integration.md` for the status-bar line that reads it.
 - The legacy `[ssh]` table is no longer supported: finter refuses to start and tells you to migrate to `[[hosts]]`.
 - Legacy `~/.finter` path-list config is no longer read.
 

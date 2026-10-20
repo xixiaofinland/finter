@@ -44,7 +44,7 @@ finter/
 
 ### Contracts
 
-- **Pane options:** `@agent`, `@agent_state` (`working|asking|done`), `@agent_since` (unix secs), `@agent_msg`; `@finter_remote=<alias>:<inner session>` on wrapper panes. Agent-agnostic: only the hook adapter knows about Claude.
+- **Pane options:** `@agent`, `@agent_state` (`working|asking|done`), `@agent_since` (unix secs), `@agent_msg`; `@finter_remote=<alias>:<inner session>` on wrapper panes; session option `@finter_colour=colour<N>` (host `color`, default 208) on wrapper sessions. Agent-agnostic: only the hook adapter knows about Claude.
 - **Inner server:** remote sessions live on `tmux -L finter` (socket name overridable with `FINTER_INNER_SOCKET`, used by smoke tests). Sessions are `X` and `X~term`.
 - **`finter list --json`:** `{"v":1,"projects":[...],"panes":[...]}`; bump `v` on incompatible changes (`remote::LIST_VERSION`).
 - **Cache:** `$XDG_RUNTIME_DIR/finter/<host>.json`, stale after 4s, offline flag keeps last data.
@@ -66,6 +66,7 @@ roots = [
 [[hosts]]
 name = "mini"
 ssh = "mac-mini"
+color = 180 # optional
 ```
 
 The legacy `[ssh]` table is rejected with a message pointing to `[[hosts]]`.
