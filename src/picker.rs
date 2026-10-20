@@ -60,8 +60,13 @@ impl Row {
             Some(a) => (format_age(age_secs(self.now, a.since)), a.msg.as_str()),
             None => (String::new(), ""),
         };
+        // Orange matches the status-left colour of a wrapper session in tmux.
+        let name_color = match self.target {
+            Target::Remote { .. } => "\x1b[38;5;208m",
+            Target::Local { .. } => "",
+        };
         format!(
-            "{color}{icon}\x1b[0m {}{pad}  \x1b[2m{age:>4}  {msg}\x1b[0m",
+            "{color}{icon}\x1b[0m {name_color}{}\x1b[0m{pad}  \x1b[2m{age:>4}  {msg}\x1b[0m",
             self.name
         )
     }
@@ -399,6 +404,15 @@ mod tests {
         let line = rows[0].line();
         assert!(line.contains('❓') && line.contains("3m") && line.contains("needs ok"));
         assert_eq!(get_match("local:a", rows).unwrap().name, "a");
+    }
+
+    #[test]
+    fn remote_row_names_are_orange() {
+        let hs = host_state(&[("recap", false)], vec![], false);
+        let rows = build_rows(&[], &[], &[], &[hs], None, 0);
+        assert!(rows[0].line().contains("\x1b[38;5;208mmini/recap\x1b[0m"));
+        let rows = build_rows(&[], &["a".into()], &[], &[], None, 0);
+        assert!(!rows[0].line().contains("38;5;208"));
     }
 
     #[test]
