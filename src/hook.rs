@@ -26,6 +26,25 @@ pub(crate) struct HookInput {
     pub(crate) transcript_path: Option<String>,
     #[serde(default)]
     pub(crate) last_assistant_message: Option<String>,
+    #[serde(default)]
+    pub(crate) tool_name: Option<String>,
+    #[serde(default)]
+    pub(crate) tool_input: Option<serde_json::Value>,
+}
+
+/// What a permission dialog asks about, e.g. `Bash: rm -rf build/`: the tool
+/// plus its most telling input field.
+fn permission_text(input: &HookInput) -> Option<String> {
+    let tool = input.tool_name.as_deref()?;
+    let detail = input.tool_input.as_ref().and_then(|v| {
+        ["command", "file_path", "url", "pattern", "path", "prompt"]
+            .iter()
+            .find_map(|k| v.get(k).and_then(|x| x.as_str()))
+    });
+    Some(match detail {
+        Some(d) => format!("{tool}: {d}"),
+        None => tool.to_string(),
+    })
 }
 
 /// Claude's final reply for a Stop event. Prefer the field Claude Code sends,
@@ -68,7 +87,8 @@ pub(crate) fn decide(
         }
         // Claude's idle reminder arrives after Stop; it must not turn `done` into `asking`.
         "Notification" if notification_type == Some("idle_prompt") => Plan::Skip,
-        "Notification" => Plan::Set(AgentState::Asking),
+        // PermissionRequest fires as the dialog opens; Notification only after it has waited a while.
+        "PermissionRequest" | "Notification" => Plan::Set(AgentState::Asking),
         "Stop" => Plan::Set(AgentState::Done),
         "SessionEnd" => Plan::Clear,
         _ => Plan::Skip,
@@ -191,10 +211,9 @@ fn try_hook(agent: &str) -> Result<(), Box<dyn std::error::Error>> {
         }
         Plan::Set(state) => {
             let msg = match state {
-                AgentState::Asking => input
-                    .message
-                    .as_deref()
-                    .map(|m| summarize(m, MSG_MAX_CHARS)),
+                AgentState::Asking => permission_text(&input)
+                    .or_else(|| input.message.clone())
+                    .map(|m| summarize(&m, MSG_MAX_CHARS)),
                 AgentState::Done => done_text(&input).map(|t| summarize(&t, MSG_MAX_CHARS)),
                 AgentState::Working => None,
             }
@@ -293,6 +312,27 @@ mod tests {
     fn transcript_tail_yields_last_assistant_text() {
         let text = last_assistant_text(TRANSCRIPT).expect("text");
         assert!(text.starts_with("All done"), "{text}");
+    }
+
+    #[test]
+    fn permission_request_asks_with_tool_and_command() {
+        assert_eq!(
+            decide("PermissionRequest", None, Some(AgentState::Working)),
+            Plan::Set(AgentState::Asking)
+        );
+        let input = parse(
+            r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf build/","description":"clean"}}"#,
+        );
+        assert_eq!(
+            permission_text(&input).as_deref(),
+            Some("Bash: rm -rf build/")
+        );
+        let input = parse(
+            r#"{"hook_event_name":"PermissionRequest","tool_name":"Edit","tool_input":{"file_path":"/a/b.rs"}}"#,
+        );
+        assert_eq!(permission_text(&input).as_deref(), Some("Edit: /a/b.rs"));
+        let input = parse(r#"{"hook_event_name":"Notification","message":"needs permission"}"#);
+        assert_eq!(permission_text(&input), None);
     }
 
     #[test]
