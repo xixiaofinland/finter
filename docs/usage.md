@@ -9,7 +9,7 @@
 | `finter hook claude` | Record Claude Code state in the current tmux pane (stdin: hook JSON) |
 | `finter status [--current <name>]` | Print the status-bar segment (waiting agents on this machine and hosts); `--current` names the session to leave out, default: ask tmux |
 | `finter next` | Jump to the oldest asking agent, then the oldest done one |
-| `finter seen [--leave]` | Clear `done` for the current session; with `--leave` also the previous one |
+| `finter seen [--leave]` | Clear `done` for the current session; with `--leave` also clear the previous one's `done` and demote its `asking` to `done` |
 | `finter preview <target>` | Print recent pane output (picker preview) |
 | `finter copy-mode` | Enter copy mode in the remote tmux behind the current pane |
 | `finter list [--json]` | Print this machine's projects and agent panes (run over ssh by other hosts) |
@@ -93,8 +93,9 @@ Both attach to sessions `recap` and `recap~term` on a dedicated tmux server (`tm
 | Event | State |
 | --- | --- |
 | `UserPromptSubmit`, `PreToolUse` | `working` (no write if already working) |
+| `PermissionRequest` | `asking` as the dialog opens, message = tool and its main input (`Bash: rm -rf build/`) |
 | `Notification` | `asking`, message = notification text (`idle_prompt` is ignored) |
-| `Stop` | `done`, message = last assistant text (about 60 chars) |
+| `Stop` | `done`, message = `last_assistant_message` (transcript tail as fallback, about 60 chars) |
 | `SessionEnd` | all `@agent_*` options removed |
 
 With `$TMUX_PANE` unset (for example headless `claude -p`) the hook does nothing. It always exits 0 and only writes to stderr on errors.

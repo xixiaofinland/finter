@@ -46,7 +46,7 @@ bind [ if -F '#{@finter_remote}' 'run-shell -b "finter copy-mode"' 'copy-mode'
 
 `pane-focus-in` needs `set -g focus-events on`.
 
-Register the hook in Claude Code (`~/.claude/settings.json`) for `UserPromptSubmit`, `PreToolUse`, `Notification`, `Stop` and `SessionEnd`:
+Register the hook in Claude Code (`~/.claude/settings.json`) for `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `Notification`, `Stop` and `SessionEnd`:
 
 ```json
 {

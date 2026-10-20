@@ -88,7 +88,7 @@ Remote project without a local wrapper:
 
 - `status`: local agent panes plus every host's cached panes; excludes the current session; asking first (red background, remote colour differs), then done (green), at most 3 names then `+N`, `⚙N` for working, `host ✕` for offline hosts. Prints nothing when idle.
 - `next`: oldest asking, else oldest done, across local and remote; switches to the local wrapper (created if missing); `X~term` selects the wrapper's terminal window. Without a match it shows `nothing waiting`.
-- `seen`: clears `done` (never `asking`) for the current session, and with `--leave` also for `#{client_last_session}` (used by `client-session-changed`; `pane-focus-in` clears only the current one). Remote sessions are cleared with a fire-and-forget ssh `if-shell` on `tmux -L finter`, and the local cache is updated at once.
+- `seen`: clears `done` for the current session, and with `--leave` also for `#{client_last_session}`, whose `asking` is demoted to `done` (an interrupted permission prompt fires no hook, so leaving is the signal; the `done` reminder stays until the next visit) (used by `client-session-changed`; `pane-focus-in` clears only the current one). Remote sessions are cleared with a fire-and-forget ssh `if-shell` on `tmux -L finter`, and the local cache is updated at once.
 
 ## Known Caveats
 
@@ -98,4 +98,5 @@ Remote project without a local wrapper:
 - `inner.conf` is applied when the inner tmux server starts; changing it later needs a restart of that server (`tmux -L finter kill-server`) to take effect.
 - The runtime directory (`$XDG_RUNTIME_DIR/finter`, or `<tmp>/finter-<uid>`) is created with mode 0700.
 - Only immediate subdirectories are considered projects.
+- `PermissionRequest` means `asking` as soon as the dialog opens; the hook prints nothing on stdout, so it never answers the prompt.
 - `Notification` means `asking`, except `notification_type: idle_prompt`, which is ignored so a finished turn stays `done`.
