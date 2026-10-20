@@ -96,6 +96,18 @@ pub(crate) fn entries_from_list(host: &str, list: &ListOutput) -> Vec<AgentEntry
         .collect()
 }
 
+/// Reflect killed inner sessions in a host's list, so a picker opened before
+/// the next refresh does not show them.
+pub(crate) fn forget_sessions(list: &mut ListOutput, sessions: &[&str]) {
+    for p in list.projects.iter_mut() {
+        if sessions.contains(&p.name.as_str()) {
+            p.session_exists = false;
+        }
+    }
+    list.panes
+        .retain(|p| !sessions.contains(&p.session.as_str()));
+}
+
 /// Parse ssh output. The JSON is the last line that starts with `{`, so login
 /// banners cannot break it. Newer schema versions are accepted (fields are only
 /// ever added), and panes with an unknown state are skipped.
@@ -735,5 +747,13 @@ mod tests {
         ] {
             assert!(INNER_CONF.contains(needle), "{needle} missing");
         }
+    }
+
+    #[test]
+    fn forget_sessions_clears_exists_and_drops_panes() {
+        let mut list = sample_list();
+        forget_sessions(&mut list, &["recap", "recap~term"]);
+        assert!(list.projects.iter().all(|p| !p.session_exists));
+        assert!(list.panes.is_empty());
     }
 }

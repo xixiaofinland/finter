@@ -424,6 +424,21 @@ pub(crate) fn kill_inner_cmd(sessions: &[&str]) -> String {
     cmds.join("; ")
 }
 
+/// The cache is refreshed every few seconds; update it now so the picker
+/// does not mark the project as running.
+fn forget_in_cache(hosts: &[HostConfig], alias: &str, sessions: &[&str]) {
+    let Some(host) = hosts.iter().find(|h| h.ssh == alias) else {
+        return;
+    };
+    let Some(mut cache) = remote::read_cache(&host.name) else {
+        return;
+    };
+    if let Some(data) = cache.data.as_mut() {
+        remote::forget_sessions(data, sessions);
+        remote::write_cache(&host.name, &cache);
+    }
+}
+
 /// Leave the current session and kill it, together with the inner sessions
 /// behind its wrapper panes: killing a wrapper means being done with the project.
 pub fn run_kill() {
@@ -440,6 +455,8 @@ pub fn run_kill() {
     inner.sort();
     inner.dedup();
 
+    let hosts = load_config_quiet().map(|c| c.hosts).unwrap_or_default();
+
     // Switch first: killing the inner sessions ends the wrapper's windows, and a
     // client left on a destroyed session would detach.
     tmux::run_on(Socket::Default, &["switch-client", "-n"]);
@@ -451,8 +468,9 @@ pub fn run_kill() {
             .filter(|(a, _)| a == alias)
             .map(|(_, s)| s.as_str())
             .collect();
-        if let Err(e) = remote::ssh_run(alias, &kill_inner_cmd(&sessions)) {
-            eprintln!("finter kill: {alias}: {e}");
+        match remote::ssh_run(alias, &kill_inner_cmd(&sessions)) {
+            Ok(_) => forget_in_cache(&hosts, alias, &sessions),
+            Err(e) => eprintln!("finter kill: {alias}: {e}"),
         }
     }
     let target = format!("={session}");
