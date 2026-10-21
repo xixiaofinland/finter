@@ -383,12 +383,13 @@ pub(crate) fn load_hosts(config: &Config, now: u64, refresh: bool) -> Vec<HostSt
 
 // ── attach (runs on the remote machine)
 
-/// Name of the inner session for project `name`.
-pub(crate) fn inner_session_name(name: &str, term: bool) -> String {
-    if term {
-        format!("{name}{TERM_SUFFIX}")
-    } else {
-        name.to_string()
+/// Name of the inner session for project `name`: the project session for `None`,
+/// `X~term` for terminal slot 1 and `X~termN` for slot N (see `state::term_slot`).
+pub(crate) fn inner_session_name(name: &str, term: Option<u32>) -> String {
+    match term {
+        None => name.to_string(),
+        Some(1) => format!("{name}{TERM_SUFFIX}"),
+        Some(n) => format!("{name}{TERM_SUFFIX}{n}"),
     }
 }
 
@@ -417,7 +418,7 @@ fn write_inner_conf() -> Result<PathBuf, Box<dyn Error>> {
 }
 
 /// Replace this process with `tmux -L finter new-session -A` for project `name`.
-pub(crate) fn exec_attach(name: &str, term: bool, path: &str) -> Result<(), Box<dyn Error>> {
+pub(crate) fn exec_attach(name: &str, term: Option<u32>, path: &str) -> Result<(), Box<dyn Error>> {
     let conf = write_inner_conf()?;
     let session = inner_session_name(name, term);
     let err = Command::new("tmux")
@@ -447,8 +448,12 @@ pub(crate) fn split_remote_tag(tag: &str) -> Option<(&str, &str)> {
 /// Window command: retry ssh only when the connection drops (exit 255).
 /// Any other exit (clean detach, killed inner session, remote error) ends the loop.
 /// Wrapped in `sh -c` because the tmux default-shell may be fish.
-pub(crate) fn attach_command(alias: &str, project: &str, term: bool) -> String {
-    let suffix = if term { " --term" } else { "" };
+pub(crate) fn attach_command(alias: &str, project: &str, term: Option<u32>) -> String {
+    let suffix = match term {
+        None => String::new(),
+        Some(1) => " --term".to_string(),
+        Some(n) => format!(" --term={n}"),
+    };
     // ssh joins its argv with spaces for the remote shell, so send one quoted string.
     let remote = format!("finter attach {}{suffix}", shell_quote(project));
     let script = format!(
@@ -473,12 +478,42 @@ pub(crate) fn create_wrapper(host: &HostConfig, project: &str) -> bool {
             "#{pane_id}",
             "-s",
             &session,
-            &attach_command(&host.ssh, project, false),
+            &attach_command(&host.ssh, project, None),
         ],
     );
     let Some(first) = first else { return false };
+    tmux::run_on(
+        Socket::Default,
+        &[
+            "set-option",
+            "-p",
+            "-t",
+            &first,
+            "@finter_remote",
+            &remote_tag(&host.ssh, project),
+        ],
+    );
+    add_term_window(&session, &host.ssh, project, 1);
+    // Read by the status-left so the session name shows in the host's colour.
+    let colour = format!("colour{}", host.color());
+    tmux::run_on(
+        Socket::Default,
+        &["set-option", "-t", &session, "@finter_colour", &colour],
+    );
+    tmux::run_on(Socket::Default, &["select-window", "-t", &first]);
+    true
+}
+
+/// Open a detached window in wrapper `session` attached to terminal slot `slot` of
+/// `project`, tagged with `@finter_remote`. Returns the new pane id.
+pub(crate) fn add_term_window(
+    session: &str,
+    alias: &str,
+    project: &str,
+    slot: u32,
+) -> Option<String> {
     let target = format!("{session}:");
-    let second = tmux::stdout_of(
+    let pane = tmux::stdout_of(
         Socket::Default,
         &[
             "new-window",
@@ -488,29 +523,20 @@ pub(crate) fn create_wrapper(host: &HostConfig, project: &str) -> bool {
             "#{pane_id}",
             "-t",
             &target,
-            &attach_command(&host.ssh, project, true),
+            &attach_command(alias, project, Some(slot)),
         ],
-    );
-    let tag1 = remote_tag(&host.ssh, project);
+    )?;
+    let tag = remote_tag(alias, &inner_session_name(project, Some(slot)));
     tmux::run_on(
         Socket::Default,
-        &["set-option", "-p", "-t", &first, "@finter_remote", &tag1],
+        &["set-option", "-p", "-t", &pane, "@finter_remote", &tag],
     );
-    if let Some(second) = second {
-        let tag2 = remote_tag(&host.ssh, &inner_session_name(project, true));
-        tmux::run_on(
-            Socket::Default,
-            &["set-option", "-p", "-t", &second, "@finter_remote", &tag2],
-        );
-    }
-    // Read by the status-left so the session name shows in the host's colour.
-    let colour = format!("colour{}", host.color());
-    tmux::run_on(
-        Socket::Default,
-        &["set-option", "-t", &session, "@finter_colour", &colour],
-    );
-    tmux::run_on(Socket::Default, &["select-window", "-t", &first]);
-    true
+    Some(pane)
+}
+
+/// Lowest terminal slot no wrapper window uses yet; slot 1 is window 2's.
+pub(crate) fn free_term_slot(used: &[u32]) -> u32 {
+    (1..).find(|n| !used.contains(n)).unwrap_or(1)
 }
 
 #[cfg(test)]
@@ -681,20 +707,33 @@ mod tests {
     }
 
     #[test]
+    fn free_term_slot_fills_gaps() {
+        assert_eq!(free_term_slot(&[]), 1);
+        assert_eq!(free_term_slot(&[1]), 2);
+        assert_eq!(free_term_slot(&[1, 3]), 2);
+        assert_eq!(free_term_slot(&[2, 1, 3]), 4);
+    }
+
+    #[test]
     fn attach_helpers() {
-        assert_eq!(inner_session_name("x", false), "x");
-        assert_eq!(inner_session_name("x", true), "x~term");
+        assert_eq!(inner_session_name("x", None), "x");
+        assert_eq!(inner_session_name("x", Some(1)), "x~term");
+        assert_eq!(inner_session_name("x", Some(3)), "x~term3");
+        for slot in [1, 2, 10] {
+            let name = inner_session_name("x", Some(slot));
+            assert_eq!(crate::state::term_slot(&name), Some(("x", slot)));
+        }
         let folders = vec![("a".to_string(), "/p/a".to_string())];
         assert_eq!(find_project_path(&folders, "a"), Some("/p/a"));
         assert_eq!(find_project_path(&folders, "b"), None);
-        let cmd = attach_command("mac-mini", "x", true);
+        let cmd = attach_command("mac-mini", "x", Some(1));
         assert!(cmd.starts_with("sh -c '"));
         assert!(cmd.contains("ssh -t "));
         assert!(cmd.contains("finter attach "));
         assert!(cmd.contains("--term"));
         assert!(cmd.contains("[ $rc -eq 255 ] || exit $rc"));
         assert!(cmd.contains("finter: reconnecting..."));
-        assert!(!attach_command("mac-mini", "x", false).contains("--term"));
+        assert!(!attach_command("mac-mini", "x", None).contains("--term"));
         assert_eq!(remote_tag("mac-mini", "x~term"), "mac-mini:x~term");
         assert_eq!(
             split_remote_tag("mac-mini:x~term"),
@@ -713,8 +752,9 @@ mod tests {
         fs::write(&ssh, "#!/bin/sh\nsh -c \"printf '<%s>' $3\"\n").unwrap();
         fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
         for (name, term, expect) in [
-            ("my proj", false, "<finter><attach><my proj>"),
-            ("it's", true, "<finter><attach><it's><--term>"),
+            ("my proj", None, "<finter><attach><my proj>"),
+            ("it's", Some(1), "<finter><attach><it's><--term>"),
+            ("x", Some(2), "<finter><attach><x><--term=2>"),
         ] {
             let cmd = attach_command("alias", name, term);
             let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap());

@@ -1,7 +1,7 @@
 use crate::config::{Config, HostConfig};
 use crate::remote::{self, HostState};
 use crate::state::{
-    best_per_project, pick_next, project_of, wrapper_session, AgentEntry, AgentState,
+    best_per_project, pick_next, project_of, term_slot, wrapper_session, AgentEntry, AgentState,
 };
 use crate::tmux::{self, Socket};
 use std::{
@@ -409,6 +409,48 @@ pub fn run_copy_mode() {
         None => {
             tmux::run_on(Socket::Default, &["copy-mode"]);
         }
+    }
+}
+
+// ── new window
+
+/// Open a window next to the current pane. In a wrapper pane that is another
+/// terminal on the remote host (`X~termN`); a plain local window would land in
+/// the ssh process's local cwd, which is never what a remote project wants.
+pub fn run_new_window() {
+    let mut args = vec!["display-message", "-p"];
+    let pane = std::env::var("TMUX_PANE").ok();
+    if let Some(p) = pane.as_deref() {
+        args.extend(["-t", p]);
+    }
+    args.push("#{session_name}\t#{@finter_remote}\t#{pane_current_path}");
+    let Some(info) = tmux::stdout_of(Socket::Default, &args) else {
+        return;
+    };
+    let mut f = info.splitn(3, '\t');
+    let (session, tag, path) = (
+        f.next().unwrap_or(""),
+        f.next().unwrap_or(""),
+        f.next().unwrap_or(""),
+    );
+    let target = format!("={session}:");
+    let Some((alias, inner)) = remote::split_remote_tag(tag) else {
+        tmux::run_on(Socket::Default, &["new-window", "-t", &target, "-c", path]);
+        return;
+    };
+    let project = project_of(inner);
+    let used: Vec<u32> = tmux::list_pane_rows(Socket::Default)
+        .into_iter()
+        .filter(|p| p.session == session)
+        .filter_map(|p| {
+            let (a, s) = remote::split_remote_tag(&p.remote)?;
+            let (proj, slot) = term_slot(s)?;
+            (a == alias && proj == project).then_some(slot)
+        })
+        .collect();
+    let slot = remote::free_term_slot(&used);
+    if let Some(pane) = remote::add_term_window(session, alias, project, slot) {
+        tmux::run_on(Socket::Default, &["select-window", "-t", &pane]);
     }
 }
 

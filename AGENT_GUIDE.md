@@ -24,14 +24,14 @@
 finter/
 ├── .github/workflows/publish.yml  # Auto-publish to crates.io on version change
 ├── src/
-│   ├── main.rs      # clap CLI: -d and subcommands (hook, status, next, seen, preview, copy-mode, kill, list, attach)
+│   ├── main.rs      # clap CLI: -d and subcommands (hook, status, next, seen, preview, copy-mode, new-window, kill, list, attach)
 │   ├── lib.rs       # glue: picker flow, list, attach
 │   ├── config.rs    # ~/.finter.toml: roots, [[hosts]], folder scanning
 │   ├── tmux.rs      # tmux runner (default server and `-L finter`), pane listing, option argv builders
 │   ├── state.rs     # AgentState, AgentEntry, ordering, next selection, age format
 │   ├── hook.rs      # `finter hook claude`, transcript tail
 │   ├── remote.rs    # list --json schema, ssh + cache, attach, wrapper session, inner.conf use
-│   ├── status.rs    # status, next, seen, preview, copy-mode, kill
+│   ├── status.rs    # status, next, seen, preview, copy-mode, new-window, kill
 │   ├── picker.rs    # picker rows + skim
 │   └── inner.conf   # tmux config for the remote `-L finter` server (include_str!)
 ├── tests/fixtures/transcript.jsonl  # Claude transcript sample for hook tests
@@ -45,7 +45,7 @@ finter/
 ### Contracts
 
 - **Pane options:** `@agent`, `@agent_state` (`working|asking|done`), `@agent_since` (unix secs), `@agent_msg`; `@finter_remote=<alias>:<inner session>` on wrapper panes; session option `@finter_colour=colour<N>` (host `color`, default 208) on wrapper sessions. Agent-agnostic: only the hook adapter knows about Claude.
-- **Inner server:** remote sessions live on `tmux -L finter` (socket name overridable with `FINTER_INNER_SOCKET`, used by smoke tests). Sessions are `X` and `X~term`.
+- **Inner server:** remote sessions live on `tmux -L finter` (socket name overridable with `FINTER_INNER_SOCKET`, used by smoke tests). Sessions are `X`, `X~term` and, for windows added by `finter new-window`, `X~term2`, `X~term3`... (`state::term_slot`).
 - **`finter list --json`:** `{"v":1,"projects":[...],"panes":[...]}`; bump `v` on incompatible changes (`remote::LIST_VERSION`).
 - **Cache:** `$XDG_RUNTIME_DIR/finter/<host>.json`, stale after 4s, offline flag keeps last data.
 

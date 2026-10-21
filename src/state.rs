@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// Suffix of the inner terminal session that accompanies project session `X`.
+/// Suffix of the inner terminal sessions that accompany project session `X`:
+/// `X~term` for window 2, `X~term2`, `X~term3`... for windows opened later.
 pub(crate) const TERM_SUFFIX: &str = "~term";
 
 /// What an agent in a pane is doing. Stored in the `@agent_state` pane option.
@@ -61,13 +62,13 @@ pub(crate) struct AgentEntry {
 }
 
 impl AgentEntry {
-    /// Project name: the session without the `~term` suffix.
+    /// Project name: the session without the `~term[N]` suffix.
     pub(crate) fn project(&self) -> &str {
         project_of(&self.session)
     }
 
     pub(crate) fn is_term(&self) -> bool {
-        self.session.ends_with(TERM_SUFFIX)
+        project_of(&self.session).len() < self.session.len()
     }
 
     /// Session name on this machine that shows the entry: `mini/X` or `X`.
@@ -80,7 +81,23 @@ impl AgentEntry {
 }
 
 pub(crate) fn project_of(session: &str) -> &str {
-    session.strip_suffix(TERM_SUFFIX).unwrap_or(session)
+    term_slot(session).map_or(session, |(project, _)| project)
+}
+
+/// Split `X~term` into `("X", 1)` and `X~termN` into `("X", N)`; `None` for project sessions.
+pub(crate) fn term_slot(session: &str) -> Option<(&str, u32)> {
+    let (project, n) = session.rsplit_once(TERM_SUFFIX)?;
+    if project.is_empty() {
+        return None;
+    }
+    match n {
+        "" => Some((project, 1)),
+        // Only the spelling `inner_session_name` produces: `~term2`, never `~term1` or `~term02`.
+        _ if n.bytes().all(|b| b.is_ascii_digit()) && !n.starts_with('0') => {
+            n.parse().ok().filter(|&n| n >= 2).map(|n| (project, n))
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn wrapper_session(host: &str, project: &str) -> String {
@@ -216,6 +233,20 @@ mod tests {
         assert_eq!(e.local_session(), "mini/recap");
         let local = test_entry(None, "recap", AgentState::Asking, 1);
         assert_eq!(local.local_session(), "recap");
+        let third = test_entry(Some("mini"), "recap~term3", AgentState::Done, 1);
+        assert!(third.is_term());
+        assert_eq!(third.local_session(), "mini/recap");
+    }
+
+    #[test]
+    fn term_slot_accepts_only_canonical_suffixes() {
+        assert_eq!(term_slot("x~term"), Some(("x", 1)));
+        assert_eq!(term_slot("x~term2"), Some(("x", 2)));
+        assert_eq!(term_slot("a~term~term12"), Some(("a~term", 12)));
+        for s in ["x", "x~term1", "x~term02", "x~termy", "~term", "x~term-2"] {
+            assert_eq!(term_slot(s), None, "{s}");
+        }
+        assert_eq!(project_of("x~termy"), "x~termy");
     }
 
     #[test]
