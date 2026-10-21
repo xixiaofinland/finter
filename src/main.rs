@@ -41,6 +41,8 @@ enum Command {
     CopyMode,
     /// Kill the current session; for a remote project also its sessions on the host
     Kill,
+    /// Open a window; in a remote project it is a new terminal on the host
+    NewWindow,
     /// Print this machine's projects and agent panes (inner tmux server)
     List {
         #[arg(long)]
@@ -49,9 +51,10 @@ enum Command {
     /// Attach to (or create) the inner tmux session for a project; run on the remote host
     Attach {
         name: String,
-        /// Use the terminal session `<name>~term`
-        #[arg(long)]
-        term: bool,
+        /// Use the terminal session `<name>~term`; `--term=N` (N >= 2) uses `<name>~termN`
+        #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "1",
+              value_parser = clap::value_parser!(u32).range(1..))]
+        term: Option<u32>,
     },
 }
 
@@ -94,6 +97,10 @@ fn run(args: Args) -> finter::MyResult<()> {
         }
         (Some(Command::Kill), _) => {
             finter::run_kill();
+            Ok(())
+        }
+        (Some(Command::NewWindow), _) => {
+            finter::run_new_window();
             Ok(())
         }
         (Some(Command::List { json }), _) => finter::run_list(json),

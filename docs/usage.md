@@ -12,9 +12,10 @@
 | `finter seen [--leave]` | Clear `done` for the current session; with `--leave` also clear the previous one's `done` and demote its `asking` to `done` |
 | `finter preview <target>` | Print recent pane output (picker preview) |
 | `finter copy-mode` | Enter copy mode in the remote tmux behind the current pane |
+| `finter new-window` | Open a window; in a wrapper session it is another terminal on the host |
 | `finter kill` | Switch to the next session and kill the current one; for a wrapper also its inner sessions on the host |
 | `finter list [--json]` | Print this machine's projects and agent panes (run over ssh by other hosts) |
-| `finter attach <name> [--term]` | Attach to the inner tmux session of a project (run over ssh by other hosts) |
+| `finter attach <name> [--term[=N]]` | Attach to the inner tmux session of a project (run over ssh by other hosts) |
 
 ## Configure Project Roots
 
@@ -88,7 +89,9 @@ With `[[hosts]] name = "mini"`, remote project `recap` appears as `mini/recap`. 
 
 Both attach to sessions `recap` and `recap~term` on a dedicated tmux server (`tmux -L finter`) on the remote machine, so they survive disconnects. Each local pane carries `@finter_remote=<alias>:<inner session>`.
 
-Killing the wrapper with plain `kill-session` leaves the inner sessions running, and the picker keeps marking `mini/recap` with `*`. `finter kill` ends both: it switches to the next session, kills `recap` and `recap~term` on the host over ssh, then kills the wrapper.
+A plain `new-window` in `mini/recap` opens a local shell. `finter new-window` opens another remote terminal instead (`recap~term2`, `recap~term3`, ...); bind it as shown in [tmux integration](tmux-integration.md).
+
+Killing the wrapper with plain `kill-session` leaves the inner sessions running, and the picker keeps marking `mini/recap` with `*`. `finter kill` ends both: it switches to the next session, kills `recap`, `recap~term` and any `recap~termN` behind its windows on the host over ssh, then kills the wrapper.
 
 ## Agent Status
 
