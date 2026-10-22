@@ -60,7 +60,9 @@ Register the hook in Claude Code (`~/.claude/settings.json`) for `UserPromptSubm
 ```json
 {
   "hooks": {
-    "Stop": [{ "hooks": [{ "type": "command", "command": "finter hook claude" }] }]
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "finter hook claude" }] }
+    ]
   }
 }
 ```
@@ -69,7 +71,7 @@ Use the same command for the other events. Remote sessions run the hook on the r
 
 ## Inner tmux
 
-`finter attach` starts the remote sessions on `tmux -L finter` with an embedded config (`src/inner.conf`) written to `$XDG_RUNTIME_DIR/finter/inner.conf`: status bar off, no prefix key, mouse on, clipboard passthrough, `extended-keys` with `csi-u`, vi copy mode (`v`, `C-v`, `V`, `y`). The outer tmux owns all keys; the mouse wheel and PgUp/PgDn reach the remote pane.
+`finter attach` starts the remote sessions on `tmux -L finter` with an embedded config (`src/inner.conf`) written to `$XDG_RUNTIME_DIR/finter/inner.conf`: status bar off, no prefix key, mouse on, clipboard passthrough, focus events, `extended-keys` with `csi-u`, vi copy mode (`v`, `C-v`, `V`, `y`). The outer tmux owns all keys; the mouse wheel and PgUp/PgDn reach the remote pane.
 
 ## Behavior Inside/Outside Tmux
 

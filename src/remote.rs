@@ -785,6 +785,7 @@ mod tests {
             "mouse on",
             "set-clipboard on",
             "allow-passthrough on",
+            "focus-events on",
             "extended-keys on",
             "extended-keys-format csi-u",
             "escape-time 1",
