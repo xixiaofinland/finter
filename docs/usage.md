@@ -103,7 +103,10 @@ Killing the wrapper with plain `kill-session` leaves the inner sessions running,
 | `PermissionRequest` | `asking` as the dialog opens, message = tool and its main input (`Bash: rm -rf build/`) |
 | `Notification` | `asking`, message = notification text (`idle_prompt` is ignored) |
 | `Stop` | `done`, message = `last_assistant_message` (transcript tail as fallback, about 60 chars) |
+| `Stop` while background work is unfinished | stays `working` (see below) |
 | `SessionEnd` | all `@agent_*` options removed |
+
+Claude can end its turn while a background command, async agent or Monitor still runs, for example a CI watch, and is woken when it finishes. On `Stop` the hook reads the transcript tail, and while a background task has no `<task-notification>` yet the pane stays `working`; the `Stop` after the wake-up sets `done`. A background process that never exits (a dev server) keeps the pane `working`.
 
 With `$TMUX_PANE` unset (for example headless `claude -p`) the hook does nothing. It always exits 0 and only writes to stderr on errors.
 

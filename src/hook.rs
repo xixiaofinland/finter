@@ -1,7 +1,9 @@
 use crate::state::AgentState;
 use crate::tmux::{self, Socket};
 use serde::Deserialize;
+use serde_json::Value;
 use std::{
+    collections::HashSet,
     fs::File,
     io::{Read, Seek, SeekFrom},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -50,18 +52,12 @@ fn permission_text(input: &HookInput) -> Option<String> {
 /// Claude's final reply for a Stop event. Prefer the field Claude Code sends,
 /// since the transcript may not be flushed yet when the hook runs; fall back to
 /// the transcript tail for versions that lack it.
-fn done_text(input: &HookInput) -> Option<String> {
+fn done_text(input: &HookInput, tail: Option<&str>) -> Option<String> {
     input
         .last_assistant_message
         .clone()
         .filter(|t| !t.trim().is_empty())
-        .or_else(|| {
-            input
-                .transcript_path
-                .as_deref()
-                .and_then(|p| read_tail(p, TRANSCRIPT_TAIL_BYTES).ok())
-                .and_then(|t| last_assistant_text(&t))
-        })
+        .or_else(|| tail.and_then(last_assistant_text))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,10 +68,12 @@ pub(crate) enum Plan {
 }
 
 /// Map a hook event to a pane update, given the pane's current state.
+/// `background` is whether Claude still waits for background work at Stop.
 pub(crate) fn decide(
     event: &str,
     notification_type: Option<&str>,
     current: Option<AgentState>,
+    background: bool,
 ) -> Plan {
     match event {
         "UserPromptSubmit" | "PreToolUse" => {
@@ -89,6 +87,15 @@ pub(crate) fn decide(
         "Notification" if notification_type == Some("idle_prompt") => Plan::Skip,
         // PermissionRequest fires as the dialog opens; Notification only after it has waited a while.
         "PermissionRequest" | "Notification" => Plan::Set(AgentState::Asking),
+        // Claude ends its turn while a background task (e.g. a CI watch) runs and is woken when
+        // it finishes, so the turn is not the end of the work: stay `working`.
+        "Stop" if background => {
+            if current == Some(AgentState::Working) {
+                Plan::Skip
+            } else {
+                Plan::Set(AgentState::Working)
+            }
+        }
         "Stop" => Plan::Set(AgentState::Done),
         "SessionEnd" => Plan::Clear,
         _ => Plan::Skip,
@@ -129,6 +136,76 @@ pub(crate) fn last_assistant_text(jsonl: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether a transcript tail has background work that has not reported back: a
+/// `run_in_background` command, an async agent or a Monitor. Each ends (completed, failed,
+/// killed) with a `<task-notification>` naming its id. A launch older than the tail is missed.
+pub(crate) fn has_pending_background(jsonl: &str) -> bool {
+    let mut pending = HashSet::new();
+    for line in jsonl.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(id) = value.get("toolUseResult").and_then(background_task_id) {
+            pending.insert(id.to_string());
+        }
+        for text in notification_texts(&value) {
+            for id in finished_task_ids(text) {
+                pending.remove(id);
+            }
+        }
+    }
+    !pending.is_empty()
+}
+
+/// The task id in a tool result that started background work.
+fn background_task_id(result: &Value) -> Option<&str> {
+    let is_async = result.get("isAsync").and_then(|a| a.as_bool()) == Some(true);
+    result
+        .get("backgroundTaskId")
+        .or_else(|| result.get("taskId"))
+        .or_else(|| is_async.then(|| result.get("agentId")).flatten())
+        .and_then(|id| id.as_str())
+}
+
+/// Where a transcript line can deliver a `<task-notification>`: a user message when Claude was
+/// idle, or the queue (and its `queued_command` attachment) when it arrived mid-turn. Tool
+/// output and assistant text are left out, since they may only quote one.
+fn notification_texts(value: &Value) -> Vec<&str> {
+    match value.get("type").and_then(|t| t.as_str()) {
+        Some("user") => match value.pointer("/message/content") {
+            Some(Value::String(s)) => vec![s.as_str()],
+            Some(Value::Array(blocks)) => blocks
+                .iter()
+                .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                .collect(),
+            _ => Vec::new(),
+        },
+        Some("queue-operation") => value
+            .get("content")
+            .and_then(|c| c.as_str())
+            .into_iter()
+            .collect(),
+        Some("attachment") => value
+            .pointer("/attachment/prompt")
+            .and_then(|c| c.as_str())
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Ids of the tasks a `<task-notification>` text reports as ended.
+fn finished_task_ids(text: &str) -> impl Iterator<Item = &str> {
+    text.split("<task-notification>").skip(1).filter_map(|n| {
+        let n = n.split("</task-notification>").next()?;
+        if !n.contains("<status>") {
+            return None;
+        }
+        let (_, rest) = n.split_once("<task-id>")?;
+        rest.split_once("</task-id>").map(|(id, _)| id.trim())
+    })
 }
 
 /// Read at most the last `max_bytes` of a file as complete lines.
@@ -196,14 +273,24 @@ fn try_hook(agent: &str) -> Result<(), Box<dyn std::error::Error>> {
     std::io::stdin().read_to_string(&mut raw)?;
     let input: HookInput = serde_json::from_str(&raw)?;
 
+    let tail = match input.hook_event_name.as_str() {
+        "Stop" => input
+            .transcript_path
+            .as_deref()
+            .and_then(|p| read_tail(p, TRANSCRIPT_TAIL_BYTES).ok()),
+        _ => None,
+    };
+    let background = tail.as_deref().is_some_and(has_pending_background);
     let current = match input.hook_event_name.as_str() {
         "UserPromptSubmit" | "PreToolUse" => current_state(&pane),
+        "Stop" if background => current_state(&pane),
         _ => None,
     };
     match decide(
         &input.hook_event_name,
         input.notification_type.as_deref(),
         current,
+        background,
     ) {
         Plan::Skip => {}
         Plan::Clear => {
@@ -214,7 +301,9 @@ fn try_hook(agent: &str) -> Result<(), Box<dyn std::error::Error>> {
                 AgentState::Asking => permission_text(&input)
                     .or_else(|| input.message.clone())
                     .map(|m| summarize(&m, MSG_MAX_CHARS)),
-                AgentState::Done => done_text(&input).map(|t| summarize(&t, MSG_MAX_CHARS)),
+                AgentState::Done => {
+                    done_text(&input, tail.as_deref()).map(|t| summarize(&t, MSG_MAX_CHARS))
+                }
                 AgentState::Working => None,
             }
             .unwrap_or_default();
@@ -239,7 +328,12 @@ mod tests {
     fn hook_json_maps_to_states() {
         let ev = |json: &str, cur| {
             let i = parse(json);
-            decide(&i.hook_event_name, i.notification_type.as_deref(), cur)
+            decide(
+                &i.hook_event_name,
+                i.notification_type.as_deref(),
+                cur,
+                false,
+            )
         };
         assert_eq!(
             ev(
@@ -275,6 +369,7 @@ mod tests {
                 &i.hook_event_name,
                 i.notification_type.as_deref(),
                 Some(AgentState::Done),
+                false,
             )
         };
         let idle = r#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#;
@@ -290,9 +385,12 @@ mod tests {
     #[test]
     fn working_write_is_skipped_when_already_working() {
         for event in ["UserPromptSubmit", "PreToolUse"] {
-            assert_eq!(decide(event, None, Some(AgentState::Working)), Plan::Skip);
             assert_eq!(
-                decide(event, None, Some(AgentState::Done)),
+                decide(event, None, Some(AgentState::Working), false),
+                Plan::Skip
+            );
+            assert_eq!(
+                decide(event, None, Some(AgentState::Done), false),
                 Plan::Set(AgentState::Working)
             );
         }
@@ -317,7 +415,7 @@ mod tests {
     #[test]
     fn permission_request_asks_with_tool_and_command() {
         assert_eq!(
-            decide("PermissionRequest", None, Some(AgentState::Working)),
+            decide("PermissionRequest", None, Some(AgentState::Working), false),
             Plan::Set(AgentState::Asking)
         );
         let input = parse(
@@ -340,10 +438,16 @@ mod tests {
         let input = parse(
             r#"{"hook_event_name":"Stop","last_assistant_message":"hello there","transcript_path":"/nonexistent"}"#,
         );
-        assert_eq!(done_text(&input).as_deref(), Some("hello there"));
+        assert_eq!(done_text(&input, None).as_deref(), Some("hello there"));
 
         let input = parse(r#"{"hook_event_name":"Stop","last_assistant_message":"  "}"#);
-        assert_eq!(done_text(&input), None);
+        assert_eq!(done_text(&input, None), None);
+        assert_eq!(
+            done_text(&input, Some(TRANSCRIPT))
+                .as_deref()
+                .map(|t| &t[..8]),
+            Some("All done")
+        );
     }
 
     #[test]
@@ -353,6 +457,65 @@ mod tests {
 not json at all"#;
         assert_eq!(last_assistant_text(only_tools), None);
         assert_eq!(last_assistant_text(""), None);
+    }
+
+    #[test]
+    fn stop_with_background_work_stays_working() {
+        assert_eq!(
+            decide("Stop", None, Some(AgentState::Working), true),
+            Plan::Skip
+        );
+        assert_eq!(
+            decide("Stop", None, Some(AgentState::Asking), true),
+            Plan::Set(AgentState::Working)
+        );
+        assert_eq!(
+            decide("Stop", None, None, true),
+            Plan::Set(AgentState::Working)
+        );
+    }
+
+    // Lines shaped like Claude Code's: the launch result carries the id in `toolUseResult`, the
+    // wake-up is a user message holding a `<task-notification>`.
+    const BASH_BG: &str = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"Command running in background with ID: bj8pg9fzu."}]},"toolUseResult":{"stdout":"","backgroundTaskId":"bj8pg9fzu"}}"#;
+    const BASH_DONE: &str = r#"{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>bj8pg9fzu</task-id>\n<status>completed</status>\n</task-notification>"}}"#;
+    const AGENT_BG: &str = r#"{"type":"user","message":{"role":"user","content":[]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"aadc"}}"#;
+    const MONITOR_BG: &str = r#"{"type":"user","message":{"role":"user","content":[]},"toolUseResult":{"taskId":"b0t2","timeoutMs":900000,"persistent":false}}"#;
+
+    #[test]
+    fn background_task_pending_until_notified() {
+        assert!(!has_pending_background(TRANSCRIPT));
+        assert!(has_pending_background(BASH_BG));
+        assert!(!has_pending_background(&format!("{BASH_BG}\n{BASH_DONE}")));
+        assert!(has_pending_background(AGENT_BG));
+        assert!(has_pending_background(MONITOR_BG));
+
+        let killed = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<task-notification><task-id>aadc</task-id><status>killed</status></task-notification> <task-notification><task-id>b0t2</task-id><status>completed</status></task-notification>"}]}}"#;
+        assert!(!has_pending_background(&format!(
+            "{AGENT_BG}\n{MONITOR_BG}\n{killed}"
+        )));
+        // Only one of two finished.
+        assert!(has_pending_background(&format!(
+            "{BASH_BG}\n{AGENT_BG}\n{BASH_DONE}"
+        )));
+    }
+
+    #[test]
+    fn notification_queued_mid_turn_finishes_the_task() {
+        let queued = r#"{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>bj8pg9fzu</task-id>\n<status>completed</status>\n</task-notification>"}"#;
+        assert!(!has_pending_background(&format!("{BASH_BG}\n{queued}")));
+        let attached = r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"<task-notification>\n<task-id>bj8pg9fzu</task-id>\n<status>completed</status>\n</task-notification>"}}"#;
+        assert!(!has_pending_background(&format!("{BASH_BG}\n{attached}")));
+    }
+
+    #[test]
+    fn notification_text_outside_a_user_message_does_not_finish_a_task() {
+        // An assistant quoting a notification, or a tool printing one, is not a wake-up.
+        let quoted = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"<task-notification><task-id>bj8pg9fzu</task-id><status>completed</status></task-notification>"}]}}"#;
+        assert!(has_pending_background(&format!("{BASH_BG}\n{quoted}")));
+        // A synchronous agent result has an agentId but is not async.
+        let sync_agent = r#"{"type":"user","toolUseResult":{"agentId":"x1","status":"completed"}}"#;
+        assert!(!has_pending_background(sync_agent));
     }
 
     #[test]

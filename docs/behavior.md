@@ -103,3 +103,4 @@ Remote project without a local wrapper:
 - Only immediate subdirectories are considered projects.
 - `PermissionRequest` means `asking` as soon as the dialog opens; the hook prints nothing on stdout, so it never answers the prompt.
 - `Notification` means `asking`, except `notification_type: idle_prompt`, which is ignored so a finished turn stays `done`.
+- `Stop` means `done` only when the transcript tail has no unfinished background task (a `toolUseResult` with `backgroundTaskId`, `taskId` or an async `agentId`, without a `<task-notification>` for that id in a user message, queue entry or queued attachment); otherwise the pane stays `working`. A launch older than the 512 KiB tail is not seen.
