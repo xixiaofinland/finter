@@ -220,17 +220,22 @@ pub(crate) fn parse_wrapper<'a>(
 /// happens in between is never overwritten. `done` is cleared before `asking`
 /// is demoted, so a demoted pane keeps its `done`.
 pub(crate) fn seen_args(panes: &[&str], action: SeenAction) -> Vec<String> {
-    let unset = tmux::AGENT_OPTIONS
-        .iter()
-        .map(|o| format!("set-option -pu -q {o}"))
-        .collect::<Vec<_>>()
-        .join(" ; ");
-    let mut steps: Vec<(&str, String)> = vec![("done", unset)];
-    if action == SeenAction::Leave {
-        steps.push(("asking", "set-option -p -q @agent_state done".to_string()));
-    }
     let mut args: Vec<String> = Vec::new();
     for pane in panes {
+        // `-t` inside the command is required: if-shell's `-t` only drives the condition,
+        // an unqualified `set-option -p` hits the server's current pane.
+        let unset = tmux::AGENT_OPTIONS
+            .iter()
+            .map(|o| format!("set-option -pu -q -t {pane} {o}"))
+            .collect::<Vec<_>>()
+            .join(" ; ");
+        let mut steps: Vec<(&str, String)> = vec![("done", unset)];
+        if action == SeenAction::Leave {
+            steps.push((
+                "asking",
+                format!("set-option -p -q -t {pane} @agent_state done"),
+            ));
+        }
         for (state, cmd) in &steps {
             if !args.is_empty() {
                 args.push(";".to_string());
@@ -656,7 +661,7 @@ mod tests {
         assert!(!view.iter().any(|a| a.contains("asking")));
         assert!(view
             .iter()
-            .any(|a| a.contains("set-option -pu -q @agent_msg")));
+            .any(|a| a.contains("set-option -pu -q -t %1 @agent_msg")));
 
         let leave = seen_args(&["%1"], SeenAction::Leave);
         let done_at = leave
@@ -673,7 +678,7 @@ mod tests {
         );
         assert!(leave
             .iter()
-            .any(|a| a == "set-option -p -q @agent_state done"));
+            .any(|a| a == "set-option -p -q -t %1 @agent_state done"));
     }
 
     #[test]
