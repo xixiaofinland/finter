@@ -5,6 +5,7 @@ use crate::state::{
 };
 use crate::status::{local_target, parse_wrapper, remote_target};
 use ansi_to_tui::IntoText;
+use ratatui_core::style::{Color, Modifier};
 use ratatui_core::text::Line;
 use skim::prelude::*;
 use std::error::Error;
@@ -93,11 +94,24 @@ impl SkimItem for Row {
     }
 
     fn display(&self, _context: DisplayContext) -> Line<'_> {
-        self.line()
+        let mut line = self
+            .line()
             .into_text()
             .ok()
             .and_then(|t| t.lines.into_iter().next())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // ansi-to-tui turns `\x1b[0m` into explicit reset colours, which would
+        // punch holes in skim's full-row highlight; inherit the row style instead.
+        // Its "remove every modifier" would likewise strip the row's own modifiers.
+        let inherit = |c: Option<Color>| c.filter(|c| *c != Color::Reset);
+        for span in &mut line.spans {
+            let style = &mut span.style;
+            style.fg = inherit(style.fg);
+            style.bg = inherit(style.bg);
+            style.underline_color = inherit(style.underline_color);
+            style.sub_modifier = Modifier::empty();
+        }
+        line
     }
 
     fn output(&self) -> Cow<'_, str> {
@@ -264,6 +278,22 @@ pub(crate) fn offline_header(hosts: &[HostState]) -> Option<String> {
     (!down.is_empty()).then(|| down.join("  "))
 }
 
+fn skim_options(header: Option<&str>, preview_cmd: String) -> Result<SkimOptions, Box<dyn Error>> {
+    let mut builder = SkimOptionsBuilder::default();
+    builder
+        .height("100%")
+        .multi(false)
+        .color("dark")
+        .highlight_line(true)
+        .cycle(true)
+        .preview(preview_cmd)
+        .preview_window("right:50%");
+    if let Some(h) = header {
+        builder.header(h);
+    }
+    Ok(builder.build()?)
+}
+
 pub(crate) fn select_in_skim(
     rows: Vec<Row>,
     header: Option<&str>,
@@ -272,18 +302,7 @@ pub(crate) fn select_in_skim(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "finter".to_string());
     let preview_cmd = format!("{} preview {{}}", crate::tmux::shell_quote(&exe));
-
-    let mut builder = SkimOptionsBuilder::default();
-    builder
-        .height("100%")
-        .multi(false)
-        .color("dark")
-        .preview(preview_cmd)
-        .preview_window("right:50%");
-    if let Some(h) = header {
-        builder.header(h);
-    }
-    let options = builder.build()?;
+    let options = skim_options(header, preview_cmd)?;
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
     let items: Vec<Arc<dyn SkimItem>> = rows
@@ -500,6 +519,60 @@ mod tests {
             .find(|s| s.content.contains('❓'))
             .unwrap();
         assert_eq!(icon.style.fg, Some(ratatui_core::style::Color::Red));
+    }
+
+    #[test]
+    fn display_leaves_the_background_to_the_highlighted_row() {
+        use ratatui_core::{buffer::Buffer, layout::Rect, style::Style, widgets::Widget};
+        let hs = host_state(
+            &[("recap", true)],
+            vec![pane("recap", AgentState::Done, 40)],
+            false,
+        );
+        let rows = build_rows(&[], &[], &[], &[], &[hs], None, 220);
+        let line = rows[0].display(DisplayContext::default());
+        // `\x1b[0m` must not become a reset background, or the full-row
+        // highlight would show gaps behind the name, age and message.
+        for span in &line.spans {
+            assert_eq!(span.style.bg, None, "{span:?}");
+            assert_ne!(span.style.fg, Some(Color::Reset), "{span:?}");
+        }
+        let find = |s: &str| line.spans.iter().find(|sp| sp.content.contains(s)).unwrap();
+        assert_eq!(find("✅").style.fg, Some(Color::Green));
+        assert_eq!(find("mini/recap").style.fg, Some(Color::Indexed(208)));
+        let age = find("3m");
+        assert!(age.style.add_modifier.contains(Modifier::DIM), "{age:?}");
+
+        // Render it the way skim draws the current row (dark theme: bg 236 on
+        // the whole line): every cell keeps the highlight and its own colour.
+        let width = 40;
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, 1));
+        let current = Style::default().bg(Color::Indexed(236));
+        line.clone().style(current).render(buf.area, &mut buf);
+        let mut x = 0;
+        while x < width {
+            assert_eq!(buf[(x, 0)].bg, Color::Indexed(236), "cell {x}");
+            // The emoji's second cell is hidden behind it, so ratatui leaves it blank.
+            x += if buf[(x, 0)].symbol() == "✅" { 2 } else { 1 };
+        }
+        let cell_of = |s: &str| {
+            let text: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+            let col = text.find(s).unwrap();
+            &buf[(text[..col].chars().count() as u16, 0)]
+        };
+        assert_eq!(cell_of("mini").fg, Color::Indexed(208));
+        assert!(cell_of("3m").modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn skim_options_highlight_the_full_row_and_cycle() {
+        let options = skim_options(Some("mini ✕"), "finter preview {}".into()).unwrap();
+        assert!(options.highlight_line);
+        assert!(options.cycle);
+        assert_eq!(options.header.as_deref(), Some("mini ✕"));
+        assert_eq!(options.preview.as_deref(), Some("finter preview {}"));
+        assert!(!options.multi);
+        assert!(skim_options(None, String::new()).unwrap().header.is_none());
     }
 
     fn plain(row: &Row) -> String {
