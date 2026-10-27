@@ -454,33 +454,67 @@ pub fn run_copy_mode() {
     }
 }
 
-// ── new window
+// ── new window, split window
+
+/// Where a new project terminal opens.
+enum Open {
+    Window,
+    Split { vertical: bool },
+}
 
 /// Open a window next to the current pane. In a wrapper pane that is another
 /// terminal on the remote host (`X~termN`); a plain local window would land in
 /// the ssh process's local cwd, which is never what a remote project wants.
 pub fn run_new_window() {
+    open_term(Open::Window);
+}
+
+/// Split the current pane. In a wrapper pane the new pane is another terminal of
+/// the project (`X~termN`), like `run_new_window`; splitting the wrapper pane
+/// plainly would give a shell outside the project's sessions.
+pub fn run_split_window(vertical: bool) {
+    open_term(Open::Split { vertical });
+}
+
+fn open_term(open: Open) {
     let mut args = vec!["display-message", "-p"];
     let pane = std::env::var("TMUX_PANE").ok();
     if let Some(p) = pane.as_deref() {
         args.extend(["-t", p]);
     }
-    args.push("#{session_name}\t#{@finter_remote}\t#{pane_current_path}");
+    args.push("#{session_name}\t#{@finter_remote}\t#{pane_current_path}\t#{pane_id}");
     let Some(info) = tmux::stdout_of(Socket::Default, &args) else {
         return;
     };
-    let mut f = info.splitn(3, '\t');
-    let (session, tag, path) = (
+    let mut f = info.splitn(4, '\t');
+    let (session, tag, path, pane_id) = (
+        f.next().unwrap_or(""),
         f.next().unwrap_or(""),
         f.next().unwrap_or(""),
         f.next().unwrap_or(""),
     );
     let target = format!("={session}:");
     let Some((alias, inner)) = remote::split_remote_tag(tag) else {
-        tmux::run_on(Socket::Default, &["new-window", "-t", &target, "-c", path]);
+        match open {
+            Open::Window => {
+                tmux::run_on(Socket::Default, &["new-window", "-t", &target, "-c", path])
+            }
+            Open::Split { vertical } => tmux::run_on(
+                Socket::Default,
+                &[
+                    "split-window",
+                    if vertical { "-v" } else { "-h" },
+                    "-t",
+                    pane_id,
+                    "-c",
+                    path,
+                ],
+            ),
+        };
         return;
     };
     let project = project_of(inner);
+    // Split panes carry the same tags as windows, so they hold their slots too.
     let used: Vec<u32> = tmux::list_pane_rows(Socket::Default)
         .into_iter()
         .filter(|p| p.session == session)
@@ -493,8 +527,15 @@ pub fn run_new_window() {
     let slot = remote::free_term_slot(&used);
     // A remote wrapper pane's cwd is the ssh client's, meaningless for the project.
     let cwd = (alias.is_empty() && !path.is_empty()).then_some(path);
-    if let Some(pane) = remote::add_term_window(session, alias, project, slot, cwd) {
-        tmux::run_on(Socket::Default, &["select-window", "-t", &pane]);
+    match open {
+        Open::Window => {
+            if let Some(pane) = remote::add_term_window(session, alias, project, slot, cwd) {
+                tmux::run_on(Socket::Default, &["select-window", "-t", &pane]);
+            }
+        }
+        Open::Split { vertical } => {
+            remote::add_term_split(pane_id, vertical, alias, project, slot, cwd);
+        }
     }
 }
 

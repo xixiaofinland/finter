@@ -46,6 +46,9 @@ bind [ if -F '#{@finter_remote}' 'run-shell -b "finter copy-mode"' 'copy-mode'
 # new window: in a wrapper another terminal of the project, else a local one
 bind c if -F '#{@finter_remote}' 'run-shell -b "finter new-window"' 'new-window -c "#{pane_current_path}"'
 
+# split: in a wrapper another terminal of the project beside the pane, else a local one
+bind l run-shell -b "finter split-window"
+
 # kill the current session; for a wrapper also its inner sessions
 bind x run-shell "finter kill"
 
@@ -71,7 +74,7 @@ Use the same command for the other events. Project sessions run the hook on the 
 
 ## Inner tmux
 
-`finter attach` starts project sessions (local wrappers and remote hosts alike) on `tmux -L finter` with an embedded config (`src/inner.conf`) written to `$XDG_RUNTIME_DIR/finter/inner.conf`: status bar off, no prefix key, mouse on, clipboard passthrough, focus events, `extended-keys` with `csi-u`, vi copy mode (`v`, `C-v`, `V`, `y`). The outer tmux owns all keys; the mouse wheel and PgUp/PgDn reach the inner pane. `split-window` in a wrapper splits the outer wrapper pane, so the new shell is outside the project session.
+`finter attach` starts project sessions (local wrappers and remote hosts alike) on `tmux -L finter` with an embedded config (`src/inner.conf`) written to `$XDG_RUNTIME_DIR/finter/inner.conf`: status bar off, no prefix key, mouse on, clipboard passthrough, focus events, `extended-keys` with `csi-u`, vi copy mode (`v`, `C-v`, `V`, `y`). The outer tmux owns all keys; the mouse wheel and PgUp/PgDn reach the inner pane. A plain `split-window` in a wrapper splits the outer wrapper pane, so the new shell is outside the project session; `finter split-window` opens another project terminal there instead.
 
 ## Behavior Inside/Outside Tmux
 

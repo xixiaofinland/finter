@@ -13,6 +13,7 @@
 | `finter preview <target>` | Print recent pane output (picker preview) |
 | `finter copy-mode` | Enter copy mode in the inner tmux behind the current wrapper pane |
 | `finter new-window` | Open a window; in a wrapper session it is another terminal of the project |
+| `finter split-window [--vertical]` | Split the current pane side by side (`--vertical`: below); in a wrapper pane the new pane is another terminal of the project |
 | `finter kill` | Switch to the next session and kill the current one; for a wrapper also its inner sessions (on the host, or on this machine for a local project) |
 | `finter list [--json]` | Print this machine's projects and agent panes (run over ssh by other hosts) |
 | `finter attach <name> [--term[=N]]` | Attach to the inner tmux session of a project (run by local wrappers, and over ssh by other hosts) |
@@ -87,7 +88,7 @@ Selecting local project `recap` creates session `recap` (if missing) with two wi
 1. `finter attach recap`: Claude window
 2. `finter attach recap --term`: terminal window
 
-Both attach to sessions `recap` and `recap~term` on this machine's `tmux -L finter` server, the same ones other hosts reach over ssh, so the project has one session wherever it is opened from. The panes carry `@finter_remote=:recap` / `:recap~term` (empty alias = this machine). `finter new-window` adds `recap~term2`, ... here too, and `finter kill` kills the inner sessions together with the wrapper (plain `kill-session` leaves them running). Plain project sessions created by 0.4.x on the default server keep working.
+Both attach to sessions `recap` and `recap~term` on this machine's `tmux -L finter` server, the same ones other hosts reach over ssh, so the project has one session wherever it is opened from. The panes carry `@finter_remote=:recap` / `:recap~term` (empty alias = this machine). `finter new-window` and `finter split-window` add `recap~term2`, ... here too, and `finter kill` kills the inner sessions together with the wrapper (plain `kill-session` leaves them running). Plain project sessions created by 0.4.x on the default server keep working.
 
 ## Remote Projects
 

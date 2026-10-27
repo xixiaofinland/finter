@@ -577,8 +577,38 @@ pub(crate) fn add_term_window(
     cwd: Option<&str>,
 ) -> Option<String> {
     let target = format!("{session}:");
+    let args = ["new-window", "-d", "-t", &target];
+    open_term_pane(&args, alias, project, slot, cwd)
+}
+
+/// Split wrapper pane `pane` (side by side unless `vertical`) with a pane attached
+/// to terminal slot `slot` of `project`, tagged with `@finter_remote`. Returns the
+/// new pane id.
+pub(crate) fn add_term_split(
+    pane: &str,
+    vertical: bool,
+    alias: &str,
+    project: &str,
+    slot: u32,
+    cwd: Option<&str>,
+) -> Option<String> {
+    let dir = if vertical { "-v" } else { "-h" };
+    let args = ["split-window", dir, "-t", pane];
+    open_term_pane(&args, alias, project, slot, cwd)
+}
+
+/// Run `open` (a tmux command creating one pane) with the attach command for slot
+/// `slot` and tag the new pane, so every finter command treats it as a wrapper pane.
+fn open_term_pane(
+    open: &[&str],
+    alias: &str,
+    project: &str,
+    slot: u32,
+    cwd: Option<&str>,
+) -> Option<String> {
     let cmd = attach_command(alias, project, Some(slot));
-    let mut args = vec!["new-window", "-d", "-P", "-F", "#{pane_id}", "-t", &target];
+    let mut args = open.to_vec();
+    args.extend(["-P", "-F", "#{pane_id}"]);
     if let Some(cwd) = cwd {
         args.extend(["-c", cwd]);
     }

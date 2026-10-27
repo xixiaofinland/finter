@@ -43,6 +43,12 @@ enum Command {
     Kill,
     /// Open a window; in a remote project it is a new terminal on the host
     NewWindow,
+    /// Split the current pane side by side; in a wrapper the new pane is another terminal of the project
+    SplitWindow {
+        /// Stack the new pane below instead
+        #[arg(long)]
+        vertical: bool,
+    },
     /// Print this machine's projects and agent panes (inner tmux server)
     List {
         #[arg(long)]
@@ -101,6 +107,10 @@ fn run(args: Args) -> finter::MyResult<()> {
         }
         (Some(Command::NewWindow), _) => {
             finter::run_new_window();
+            Ok(())
+        }
+        (Some(Command::SplitWindow { vertical }), _) => {
+            finter::run_split_window(vertical);
             Ok(())
         }
         (Some(Command::List { json }), _) => finter::run_list(json),
