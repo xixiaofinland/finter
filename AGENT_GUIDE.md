@@ -54,7 +54,7 @@ finter/
 
 ### Testing seams
 
-Logic is pure and unit-tested: `remote::split_remote_tag`, `remote::attach_command` (remote and local forms), `hook::decide`, `hook::last_assistant_text`, `status::render_status`, `state::pick_next`, `picker::build_rows`, `watch::exit_code`, `remote::merge_fetch`, `remote::load_host_with` (takes the fetch function, so ssh is mocked). `tests/watch.rs` runs `finter watch` against a throwaway `tmux -S` server. Other tmux and ssh execution is not unit-tested; smoke test on a scratch server (`tmux -L finter-test`, `FINTER_INNER_SOCKET`, a fake `HOME`/`XDG_RUNTIME_DIR` with a seeded cache file).
+Logic is pure and unit-tested: `remote::split_remote_tag`, `remote::attach_command` (remote and local forms), `hook::decide`, `hook::last_assistant_text`, `status::render_status`, `state::pick_next`, `picker::build_rows`, `picker::skim_options`, `watch::exit_code`, `remote::merge_fetch`, `remote::load_host_with` (takes the fetch function, so ssh is mocked). `tests/watch.rs` runs `finter watch` against a throwaway `tmux -S` server. Other tmux and ssh execution is not unit-tested; smoke test on a scratch server (`tmux -L finter-test`, `FINTER_INNER_SOCKET`, a fake `HOME`/`XDG_RUNTIME_DIR` with a seeded cache file).
 
 ## Configuration
 

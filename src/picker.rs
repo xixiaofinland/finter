@@ -102,11 +102,13 @@ impl SkimItem for Row {
             .unwrap_or_default();
         // ansi-to-tui turns `\x1b[0m` into explicit reset colours, which would
         // punch holes in skim's full-row highlight; inherit the row style instead.
+        // Its "remove every modifier" would likewise strip the row's own modifiers.
+        let inherit = |c: Option<Color>| c.filter(|c| *c != Color::Reset);
         for span in &mut line.spans {
             let style = &mut span.style;
-            style.fg = style.fg.filter(|c| *c != Color::Reset);
-            style.bg = style.bg.filter(|c| *c != Color::Reset);
-            style.underline_color = style.underline_color.filter(|c| *c != Color::Reset);
+            style.fg = inherit(style.fg);
+            style.bg = inherit(style.bg);
+            style.underline_color = inherit(style.underline_color);
             style.sub_modifier = Modifier::empty();
         }
         line
