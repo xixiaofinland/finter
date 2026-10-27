@@ -39,7 +39,7 @@ bind C-o display-popup -E "finter"
 - Uses a popup-compatible fuzzy selector (`skim`).
 - On select:
   - existing session: switch/attach to it
-  - missing project session: create detached session in folder, create a second window, stay on window 1, then switch/attach
+  - missing local project session: create wrapper session `<project>` with window 1 attached to the project's Claude session and window 2 to its terminal session on this machine's inner tmux server (`tmux -L finter`), stay on window 1, then switch/attach
   - remote project: create local session `<host>/<project>` with window 1 attached to the remote Claude session and window 2 to the remote terminal session, then switch/attach
 
 Default `~/.finter.toml` (created by `finter -d ...`):

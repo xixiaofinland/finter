@@ -11,11 +11,11 @@
 | `finter next` | Jump to the oldest asking agent, then the oldest done one |
 | `finter seen [--leave]` | Clear `done` for the current session; with `--leave` also clear the previous one's `done` and demote its `asking` to `done` |
 | `finter preview <target>` | Print recent pane output (picker preview) |
-| `finter copy-mode` | Enter copy mode in the remote tmux behind the current pane |
-| `finter new-window` | Open a window; in a wrapper session it is another terminal on the host |
-| `finter kill` | Switch to the next session and kill the current one; for a wrapper also its inner sessions on the host |
+| `finter copy-mode` | Enter copy mode in the inner tmux behind the current wrapper pane |
+| `finter new-window` | Open a window; in a wrapper session it is another terminal of the project |
+| `finter kill` | Switch to the next session and kill the current one; for a wrapper also its inner sessions (on the host, or on this machine for a local project) |
 | `finter list [--json]` | Print this machine's projects and agent panes (run over ssh by other hosts) |
-| `finter attach <name> [--term[=N]]` | Attach to the inner tmux session of a project (run over ssh by other hosts) |
+| `finter attach <name> [--term[=N]]` | Attach to the inner tmux session of a project (run by local wrappers, and over ssh by other hosts) |
 
 ## Configure Project Roots
 
@@ -66,7 +66,7 @@ Flow:
 3. Reads current tmux sessions and agent states.
 4. Asks each host for `finter list --json` (cached 4 seconds).
 5. Shows one list: waiting agents first, then working, then existing sessions, then folders.
-6. Select an item to switch/create and attach.
+6. Select an item to switch/create and attach. A local project opens as a wrapper session `<name>` around the inner sessions on this machine (see below).
 
 Each row shows `icon name wait-time message`:
 
@@ -80,6 +80,15 @@ Each row shows `icon name wait-time message`:
 
 The right half previews the last lines of the pane (`finter preview`).
 
+## Local Projects
+
+Selecting local project `recap` creates session `recap` (if missing) with two windows:
+
+1. `finter attach recap`: Claude window
+2. `finter attach recap --term`: terminal window
+
+Both attach to sessions `recap` and `recap~term` on this machine's `tmux -L finter` server, the same ones other hosts reach over ssh, so the project has one session wherever it is opened from. The panes carry `@finter_remote=:recap` / `:recap~term` (empty alias = this machine). `finter new-window` adds `recap~term2`, ... here too, and `finter kill` kills the inner sessions together with the wrapper (plain `kill-session` leaves them running). Plain project sessions created by 0.4.x on the default server keep working.
+
 ## Remote Projects
 
 With `[[hosts]] name = "mini"`, remote project `recap` appears as `mini/recap`. Selecting it creates a local session `mini/recap` (if missing) with two windows:
@@ -87,9 +96,9 @@ With `[[hosts]] name = "mini"`, remote project `recap` appears as `mini/recap`. 
 1. `ssh -t <alias> finter attach recap`: Claude window
 2. `ssh -t <alias> finter attach recap --term`: terminal window
 
-Both attach to sessions `recap` and `recap~term` on a dedicated tmux server (`tmux -L finter`) on the remote machine, so they survive disconnects. Each local pane carries `@finter_remote=<alias>:<inner session>`.
+Both attach to sessions `recap` and `recap~term` on a dedicated tmux server (`tmux -L finter`) on the remote machine, so they survive disconnects. Each local pane carries `@finter_remote=<alias>:<inner session>`; local project wrappers use the same tag with an empty alias (`:recap`).
 
-A plain `new-window` in `mini/recap` opens a local shell. `finter new-window` opens another remote terminal instead (`recap~term2`, `recap~term3`, ...); bind it as shown in [tmux integration](tmux-integration.md).
+A plain `new-window` in `mini/recap` opens a local shell. `finter new-window` opens another terminal of the project instead (`recap~term2`, `recap~term3`, ...); bind it as shown in [tmux integration](tmux-integration.md).
 
 Killing the wrapper with plain `kill-session` leaves the inner sessions running, and the picker keeps marking `mini/recap` with `*`. `finter kill` ends both: it switches to the next session, kills `recap`, `recap~term` and any `recap~termN` behind its windows on the host over ssh, then kills the wrapper.
 

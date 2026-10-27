@@ -26,11 +26,13 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
     let current_session = get_current_session();
     let now = status::now_secs();
 
-    let local_agents = tmux::list_agent_entries(Socket::Default, None);
+    let inner_sessions = tmux::get_sessions_on(Socket::Inner);
+    let local_agents = tmux::list_local_agent_entries();
     let hosts = remote::load_hosts(&config, now, true);
     let rows = build_rows(
         &folders,
         &sessions,
+        &inner_sessions,
         &local_agents,
         &hosts,
         current_session.as_deref(),
@@ -43,16 +45,17 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
 
     let session_name = match row.target {
         Target::Local { session, path } => {
-            if !row.exists {
-                run_tmux_with_args(&["new-session", "-ds", &session, "-c", &path]);
-                run_tmux_with_args(&["new-window", "-t", &format!("{session}:2"), "-c", &path]);
-                run_tmux_with_args(&["select-window", "-t", &format!("{session}:1")]);
+            // An existing default-server session (legacy plain session or a wrapper) is
+            // used as is; a project folder gets a wrapper around its inner sessions.
+            if !tmux::has_session(&session) && !remote::create_local_wrapper(&session, Some(&path))
+            {
+                return Err(format!("Err: could not create session `{session}`").into());
             }
             session
         }
         Target::Remote { host, project } => {
             let wrapper = state::wrapper_session(&host.name, &project);
-            if !tmux::has_session(&wrapper) && !remote::create_wrapper(&host, &project) {
+            if !tmux::has_session(&wrapper) && !remote::create_remote_wrapper(&host, &project) {
                 return Err(format!("Err: could not create session `{wrapper}`").into());
             }
             wrapper
@@ -89,7 +92,7 @@ pub fn run_list(json: bool) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// `finter attach`: runs on the remote machine and execs into the inner tmux server.
+/// `finter attach`: runs on the machine owning the project and execs into its inner tmux server.
 pub fn run_attach(name: &str, term: Option<u32>) -> Result<(), Box<dyn Error>> {
     let config = load_config()?;
     let folders = get_folders(load_project_paths(&config)?)?;

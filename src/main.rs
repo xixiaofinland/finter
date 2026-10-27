@@ -48,7 +48,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Attach to (or create) the inner tmux session for a project; run on the remote host
+    /// Attach to (or create) the inner tmux session for a project; run by wrapper windows, locally or over ssh
     Attach {
         name: String,
         /// Use the terminal session `<name>~term`; `--term=N` (N >= 2) uses `<name>~termN`

@@ -1,4 +1,4 @@
-use crate::config::{Config, HostConfig};
+use crate::config::{get_folders, load_project_paths, Config, HostConfig};
 use crate::remote::{self, HostState};
 use crate::state::{
     best_per_project, pick_next, project_of, term_slot, wrapper_session, AgentEntry, AgentState,
@@ -75,7 +75,7 @@ pub(crate) fn render_status(
 
 /// Local agent panes plus every host's (cache-backed) panes.
 fn gather(config: Option<&Config>, refresh: bool) -> (Vec<AgentEntry>, Vec<HostState>) {
-    let mut entries = tmux::list_agent_entries(Socket::Default, None);
+    let mut entries = tmux::list_local_agent_entries();
     let hosts = config
         .map(|c| remote::load_hosts(c, now_secs(), refresh))
         .unwrap_or_default();
@@ -118,9 +118,9 @@ pub fn run_status(current_arg: Option<&str>) {
 
 // ── next
 
-/// Window to select inside the local wrapper for a remote entry.
-fn wrapper_window(wrapper: &str, host: &HostConfig, entry: &AgentEntry) -> String {
-    let tag = remote::remote_tag(&host.ssh, &entry.session);
+/// Window to select inside the wrapper (`alias` empty for this machine) for an entry.
+fn wrapper_window(wrapper: &str, alias: &str, entry: &AgentEntry) -> String {
+    let tag = remote::remote_tag(alias, &entry.session);
     let found = tmux::list_pane_rows(Socket::Default)
         .into_iter()
         .find(|p| p.session == wrapper && p.remote == tag)
@@ -132,10 +132,21 @@ fn wrapper_window(wrapper: &str, host: &HostConfig, entry: &AgentEntry) -> Strin
 /// Make sure the wrapper for a remote project exists, then switch to it.
 pub(crate) fn go_to_remote(host: &HostConfig, project: &str) -> bool {
     let wrapper = wrapper_session(&host.name, project);
-    if !tmux::has_session(&wrapper) && !remote::create_wrapper(host, project) {
+    if !tmux::has_session(&wrapper) && !remote::create_remote_wrapper(host, project) {
         return false;
     }
     tmux::run_on(Socket::Default, &["switch-client", "-t", &wrapper])
+        .status
+        .success()
+}
+
+/// Make sure the wrapper for a project of this machine exists, then switch to it.
+/// A default-server session of that name (legacy or an existing wrapper) is used as is.
+fn go_to_local(project: &str, path: Option<&str>) -> bool {
+    if !tmux::has_session(project) && !remote::create_local_wrapper(project, path) {
+        return false;
+    }
+    tmux::run_on(Socket::Default, &["switch-client", "-t", project])
         .status
         .success()
 }
@@ -149,6 +160,22 @@ pub fn run_next() {
         return;
     };
     match &entry.host {
+        None if entry.inner => {
+            let folders = config
+                .as_ref()
+                .and_then(|c| load_project_paths(c).ok())
+                .and_then(|p| get_folders(p).ok())
+                .unwrap_or_default();
+            let path = remote::find_project_path(&folders, entry.project());
+            if go_to_local(entry.project(), path) {
+                let wrapper = entry.local_session();
+                let window = wrapper_window(&wrapper, "", entry);
+                tmux::run_on(
+                    Socket::Default,
+                    &["select-window", "-t", &format!("{wrapper}:{window}")],
+                );
+            }
+        }
         None => {
             tmux::run_on(Socket::Default, &["switch-client", "-t", &entry.session]);
             let window = format!("{}:{}", entry.session, entry.window);
@@ -164,7 +191,7 @@ pub fn run_next() {
             };
             if go_to_remote(host, entry.project()) {
                 let wrapper = entry.local_session();
-                let window = wrapper_window(&wrapper, host, entry);
+                let window = wrapper_window(&wrapper, &host.ssh, entry);
                 tmux::run_on(
                     Socket::Default,
                     &["select-window", "-t", &format!("{wrapper}:{window}")],
@@ -290,17 +317,26 @@ fn seen_remote(host: &HostConfig, project: &str, action: SeenAction) {
     remote::ssh_spawn(&host.ssh, &remote::remote_tmux(&argv));
 }
 
+/// Clear agents behind a local session: the session's own panes on the default server
+/// (legacy plain sessions) and the project's inner sessions (`X`, `X~term`...) behind a
+/// local wrapper. Pane ids are per server, so each set runs on its own socket.
 fn seen_local(session: &str, action: SeenAction) {
-    let panes: Vec<String> = tmux::list_agent_entries(Socket::Default, None)
-        .into_iter()
-        .filter(|e| e.session == session && affected(e.state, action))
-        .map(|e| e.pane_id)
-        .collect();
-    if panes.is_empty() {
-        return;
+    for socket in [Socket::Default, Socket::Inner] {
+        let panes: Vec<String> = tmux::list_agent_entries(socket, None)
+            .into_iter()
+            .filter(|e| match socket {
+                Socket::Default => e.session == session,
+                Socket::Inner => project_of(&e.session) == session,
+            })
+            .filter(|e| affected(e.state, action))
+            .map(|e| e.pane_id)
+            .collect();
+        if panes.is_empty() {
+            continue;
+        }
+        let refs: Vec<&str> = panes.iter().map(String::as_str).collect();
+        tmux::run_owned(socket, &seen_args(&refs, action));
     }
-    let refs: Vec<&str> = panes.iter().map(String::as_str).collect();
-    tmux::run_owned(Socket::Default, &seen_args(&refs, action));
 }
 
 pub fn run_seen(leave: bool) {
@@ -380,8 +416,10 @@ pub fn run_preview(target: &str) {
     let pane = format!("={session}:");
     let capture = ["capture-pane", "-p", "-e", "-S", "-30", "-t", &pane];
     let text = match alias {
-        None => tmux::stdout_of(Socket::Default, &capture),
-        Some(alias) => remote::ssh_run(alias, &remote::remote_tmux(&capture)).ok(),
+        // A local wrapper pane shows the inner screen anyway; without one, read the inner session.
+        None if tmux::has_session(session) => tmux::stdout_of(Socket::Default, &capture),
+        None => tmux::stdout_of(Socket::Inner, &capture),
+        Some(alias) => remote::inner_run(alias, &capture).ok(),
     };
     let rows = std::env::var("LINES")
         .ok()
@@ -406,8 +444,7 @@ pub fn run_copy_mode() {
     match remote::split_remote_tag(&tag) {
         Some((alias, session)) => {
             let target = format!("={session}:");
-            let cmd = remote::remote_tmux(&["copy-mode", "-t", &target]);
-            if let Err(e) = remote::ssh_run(alias, &cmd) {
+            if let Err(e) = remote::inner_run(alias, &["copy-mode", "-t", &target]) {
                 eprintln!("finter copy-mode: {e}");
             }
         }
@@ -454,12 +491,26 @@ pub fn run_new_window() {
         })
         .collect();
     let slot = remote::free_term_slot(&used);
-    if let Some(pane) = remote::add_term_window(session, alias, project, slot) {
+    // A remote wrapper pane's cwd is the ssh client's, meaningless for the project.
+    let cwd = (alias.is_empty() && !path.is_empty()).then_some(path);
+    if let Some(pane) = remote::add_term_window(session, alias, project, slot, cwd) {
         tmux::run_on(Socket::Default, &["select-window", "-t", &pane]);
     }
 }
 
 // ── kill
+
+/// Kill inner sessions on `alias`'s machine (empty alias: this machine, no ssh); ones
+/// already gone are not an error.
+fn kill_inner(alias: &str, sessions: &[&str]) -> Result<(), String> {
+    if alias.is_empty() {
+        for s in sessions {
+            tmux::run_on(Socket::Inner, &["kill-session", "-t", &format!("={s}")]);
+        }
+        return Ok(());
+    }
+    remote::ssh_run(alias, &kill_inner_cmd(sessions)).map(|_| ())
+}
 
 /// Remote shell command killing each inner session; ones already gone are not an error.
 pub(crate) fn kill_inner_cmd(sessions: &[&str]) -> String {
@@ -515,8 +566,10 @@ pub fn run_kill() {
             .filter(|(a, _)| a == alias)
             .map(|(_, s)| s.as_str())
             .collect();
-        match remote::ssh_run(alias, &kill_inner_cmd(&sessions)) {
-            Ok(_) => forget_in_cache(&hosts, alias, &sessions),
+        match kill_inner(alias, &sessions) {
+            // This machine has no host cache to update.
+            Ok(()) if alias.is_empty() => {}
+            Ok(()) => forget_in_cache(&hosts, alias, &sessions),
             Err(e) => eprintln!("finter kill: {alias}: {e}"),
         }
     }
@@ -631,6 +684,18 @@ mod tests {
         assert_eq!(t("a", "a", true), [("a".into(), View)]);
         assert_eq!(t("a", "", true), [("a".into(), View)]);
         assert!(t("", "", true).is_empty());
+    }
+
+    #[test]
+    fn local_inner_entries_badge_under_their_wrapper() {
+        let v = vec![
+            crate::state::test_inner_entry("mine", AgentState::Asking, 1),
+            crate::state::test_inner_entry("mine~term", AgentState::Done, 2),
+            crate::state::test_inner_entry("other~term", AgentState::Done, 3),
+        ];
+        let out = render_status(&v, &[], Some("mine"));
+        assert!(!out.contains("mine") && out.contains("other"));
+        assert_eq!(render_status(&v, &[], None).matches("mine").count(), 1);
     }
 
     #[test]

@@ -13,7 +13,7 @@ use std::{
 pub(crate) enum Socket {
     /// The server the environment points at (`$TMUX`, or tmux's default socket).
     Default,
-    /// The dedicated `tmux -L finter` server that hosts remote-attachable sessions.
+    /// The dedicated `tmux -L finter` server that hosts every project session.
     Inner,
 }
 
@@ -186,9 +186,18 @@ pub(crate) fn list_agent_entries(socket: Socket, host: Option<&str>) -> Vec<Agen
                 state: p.state?,
                 since: p.since,
                 msg: p.msg,
+                inner: socket == Socket::Inner,
             })
         })
         .collect()
+}
+
+/// This machine's agent panes: legacy plain sessions on the default server plus
+/// everything on the inner server (host `None`, `inner` set for the latter).
+pub(crate) fn list_local_agent_entries() -> Vec<AgentEntry> {
+    let mut entries = list_agent_entries(Socket::Default, None);
+    entries.extend(list_agent_entries(Socket::Inner, None));
+    entries
 }
 
 pub(crate) fn shell_quote(value: &str) -> String {

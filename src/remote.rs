@@ -92,6 +92,7 @@ pub(crate) fn entries_from_list(host: &str, list: &ListOutput) -> Vec<AgentEntry
             state: p.state,
             since: p.since,
             msg: p.msg.clone(),
+            inner: true,
         })
         .collect()
 }
@@ -433,20 +434,40 @@ pub(crate) fn exec_attach(name: &str, term: Option<u32>, path: &str) -> Result<(
     Err(format!("failed to exec tmux: {err}").into())
 }
 
-// ── local wrapper session
+// ── wrapper session
 
-/// `@finter_remote` value for a wrapper pane: `<ssh alias>:<inner session>`.
+/// `@finter_remote` value for a wrapper pane: `<ssh alias>:<inner session>`. An empty
+/// alias means the inner server of this machine (`:X`), so the tag is non-empty for every
+/// wrapper pane, which the tmux bindings rely on.
 pub(crate) fn remote_tag(alias: &str, inner_session: &str) -> String {
     format!("{alias}:{inner_session}")
 }
 
+/// Split a `@finter_remote` value into `(alias, inner session)`; the alias is empty for
+/// this machine. `None` for anything that is not a tag (including an empty session).
 pub(crate) fn split_remote_tag(tag: &str) -> Option<(&str, &str)> {
-    tag.rsplit_once(':')
-        .filter(|(a, s)| !a.is_empty() && !s.is_empty())
+    tag.rsplit_once(':').filter(|(_, s)| !s.is_empty())
 }
 
-/// Window command: retry ssh only when the connection drops (exit 255).
-/// Any other exit (clean detach, killed inner session, remote error) ends the loop.
+/// Run inner-server tmux argv on `alias`'s machine and return stdout. An empty alias is
+/// this machine: the command runs on `Socket::Inner` directly, never over ssh.
+pub(crate) fn inner_run(alias: &str, args: &[&str]) -> Result<String, String> {
+    if alias.is_empty() {
+        let out = tmux::run_on(Socket::Inner, args);
+        return if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        } else {
+            let err = String::from_utf8_lossy(&out.stderr);
+            Err(err.trim().to_string())
+        };
+    }
+    ssh_run(alias, &remote_tmux(args))
+}
+
+/// Window command that attaches to inner session `project` (`--term[=N]` for terminals).
+/// Remote (non-empty alias): retry ssh only when the connection drops (exit 255); any
+/// other exit (clean detach, killed inner session, remote error) ends the loop.
+/// Local (empty alias): `exec finter attach`, no ssh.
 /// Wrapped in `sh -c` because the tmux default-shell may be fish.
 pub(crate) fn attach_command(alias: &str, project: &str, term: Option<u32>) -> String {
     let suffix = match term {
@@ -454,6 +475,10 @@ pub(crate) fn attach_command(alias: &str, project: &str, term: Option<u32>) -> S
         Some(1) => " --term".to_string(),
         Some(n) => format!(" --term={n}"),
     };
+    if alias.is_empty() {
+        let script = format!("exec finter attach {}{suffix}", shell_quote(project));
+        return format!("sh -c {}", shell_quote(&script));
+    }
     // ssh joins its argv with spaces for the remote shell, so send one quoted string.
     let remote = format!("finter attach {}{suffix}", shell_quote(project));
     let script = format!(
@@ -464,24 +489,39 @@ pub(crate) fn attach_command(alias: &str, project: &str, term: Option<u32>) -> S
     format!("sh -c {}", shell_quote(&script))
 }
 
-/// Create local session `host/project` with window 1 = claude, window 2 = terminal,
-/// both attached to inner sessions over ssh. Returns false when tmux refused.
-pub(crate) fn create_wrapper(host: &HostConfig, project: &str) -> bool {
-    let session = wrapper_session(&host.name, project);
-    let first = tmux::stdout_of(
-        Socket::Default,
-        &[
-            "new-session",
-            "-d",
-            "-P",
-            "-F",
-            "#{pane_id}",
-            "-s",
-            &session,
-            &attach_command(&host.ssh, project, None),
-        ],
-    );
-    let Some(first) = first else { return false };
+/// What a wrapper session is made of.
+pub(crate) struct WrapperSpec<'a> {
+    /// Session name on the default server: `host/X`, or `X` for this machine.
+    pub(crate) session: &'a str,
+    /// ssh alias of the owning machine; empty for this machine.
+    pub(crate) alias: &'a str,
+    pub(crate) project: &'a str,
+    /// `@finter_colour` value; `None` leaves it unset (shown white in the status bar).
+    pub(crate) colour: Option<String>,
+    /// Start directory of the wrapper windows, so `pane_current_path` is the project.
+    pub(crate) cwd: Option<&'a str>,
+}
+
+/// Create the wrapper with window 1 = claude, window 2 = terminal, both attached to
+/// inner sessions (over ssh, or directly for an empty alias). False when tmux refused.
+pub(crate) fn create_wrapper(spec: &WrapperSpec) -> bool {
+    let mut args = vec![
+        "new-session",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-s",
+        spec.session,
+    ];
+    if let Some(cwd) = spec.cwd {
+        args.extend(["-c", cwd]);
+    }
+    let cmd = attach_command(spec.alias, spec.project, None);
+    args.push(&cmd);
+    let Some(first) = tmux::stdout_of(Socket::Default, &args) else {
+        return false;
+    };
     tmux::run_on(
         Socket::Default,
         &[
@@ -490,18 +530,41 @@ pub(crate) fn create_wrapper(host: &HostConfig, project: &str) -> bool {
             "-t",
             &first,
             "@finter_remote",
-            &remote_tag(&host.ssh, project),
+            &remote_tag(spec.alias, spec.project),
         ],
     );
-    add_term_window(&session, &host.ssh, project, 1);
-    // Read by the status-left so the session name shows in the host's colour.
-    let colour = format!("colour{}", host.color());
-    tmux::run_on(
-        Socket::Default,
-        &["set-option", "-t", &session, "@finter_colour", &colour],
-    );
+    add_term_window(spec.session, spec.alias, spec.project, 1, spec.cwd);
+    if let Some(colour) = &spec.colour {
+        // Read by the status-left so the session name shows in the host's colour.
+        tmux::run_on(
+            Socket::Default,
+            &["set-option", "-t", spec.session, "@finter_colour", colour],
+        );
+    }
     tmux::run_on(Socket::Default, &["select-window", "-t", &first]);
     true
+}
+
+/// Wrapper `host/X` for a remote project.
+pub(crate) fn create_remote_wrapper(host: &HostConfig, project: &str) -> bool {
+    create_wrapper(&WrapperSpec {
+        session: &wrapper_session(&host.name, project),
+        alias: &host.ssh,
+        project,
+        colour: Some(format!("colour{}", host.color())),
+        cwd: None,
+    })
+}
+
+/// Wrapper `X` on the default server for a project of this machine.
+pub(crate) fn create_local_wrapper(project: &str, path: Option<&str>) -> bool {
+    create_wrapper(&WrapperSpec {
+        session: project,
+        alias: "",
+        project,
+        colour: None,
+        cwd: path,
+    })
 }
 
 /// Open a detached window in wrapper `session` attached to terminal slot `slot` of
@@ -511,21 +574,16 @@ pub(crate) fn add_term_window(
     alias: &str,
     project: &str,
     slot: u32,
+    cwd: Option<&str>,
 ) -> Option<String> {
     let target = format!("{session}:");
-    let pane = tmux::stdout_of(
-        Socket::Default,
-        &[
-            "new-window",
-            "-d",
-            "-P",
-            "-F",
-            "#{pane_id}",
-            "-t",
-            &target,
-            &attach_command(alias, project, Some(slot)),
-        ],
-    )?;
+    let cmd = attach_command(alias, project, Some(slot));
+    let mut args = vec!["new-window", "-d", "-P", "-F", "#{pane_id}", "-t", &target];
+    if let Some(cwd) = cwd {
+        args.extend(["-c", cwd]);
+    }
+    args.push(&cmd);
+    let pane = tmux::stdout_of(Socket::Default, &args)?;
     let tag = remote_tag(alias, &inner_session_name(project, Some(slot)));
     tmux::run_on(
         Socket::Default,
@@ -740,6 +798,60 @@ mod tests {
             Some(("mac-mini", "x~term"))
         );
         assert_eq!(split_remote_tag("nocolon"), None);
+    }
+
+    #[test]
+    fn empty_alias_tags_mean_this_machine() {
+        assert_eq!(remote_tag("", "x"), ":x");
+        assert_eq!(remote_tag("", "x~term2"), ":x~term2");
+        assert_eq!(split_remote_tag(":x"), Some(("", "x")));
+        assert_eq!(split_remote_tag(":x~term"), Some(("", "x~term")));
+        // An empty session is never a tag, whatever the alias.
+        assert_eq!(split_remote_tag(":"), None);
+        assert_eq!(split_remote_tag("mini:"), None);
+        assert_eq!(split_remote_tag(""), None);
+    }
+
+    #[test]
+    fn local_attach_command_execs_finter_without_ssh() {
+        let plain = attach_command("", "x", None);
+        let term = attach_command("", "x", Some(1));
+        assert!(plain.starts_with("sh -c '") && plain.contains("exec finter attach "));
+        assert!(!plain.contains("--term"));
+        assert!(term.contains("exec finter attach ") && term.contains(" --term"));
+        assert!(attach_command("", "x", Some(3)).contains("--term=3"));
+        for cmd in [&plain, &term] {
+            assert!(!cmd.contains("ssh") && !cmd.contains("255"));
+        }
+    }
+
+    #[test]
+    fn local_attach_command_survives_hostile_project_names() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("finter-fakefinter-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("finter");
+        fs::write(
+            &bin,
+            "#!/bin/sh\nfor a in \"$@\"; do printf '<%s>' \"$a\"; done\n",
+        )
+        .unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        for (name, term, expect) in [
+            ("my proj", None, "<attach><my proj>"),
+            ("it's", Some(1), "<attach><it's><--term>"),
+            ("x", Some(2), "<attach><x><--term=2>"),
+        ] {
+            let cmd = attach_command("", name, term);
+            let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap());
+            let out = Command::new("sh")
+                .args(["-c", &cmd])
+                .env("PATH", path)
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout), expect);
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

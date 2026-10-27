@@ -96,9 +96,12 @@ fn agents_of(entries: &[AgentEntry], host: Option<&str>, project: &str) -> Optio
 }
 
 /// Assemble picker rows: local sessions and folders plus every host's projects.
+/// `sessions` are the default server's; a folder also counts as running when its
+/// project has an inner session (`inner_sessions`, never shown as rows of their own).
 pub(crate) fn build_rows(
     folders: &[(String, String)],
     sessions: &[String],
+    inner_sessions: &[String],
     local_agents: &[AgentEntry],
     hosts: &[HostState],
     current_session: Option<&str>,
@@ -136,8 +139,8 @@ pub(crate) fn build_rows(
                 session: name.clone(),
                 path: path.clone(),
             },
-            false,
-            None,
+            inner_sessions.contains(name),
+            agents_of(local_agents, None, name),
         ));
     }
 
@@ -322,9 +325,41 @@ mod tests {
 
     #[test]
     fn prefers_existing_session_over_folder_duplicate() {
-        let rows = build_rows(&folders(&["repo1"]), &["repo1".into()], &[], &[], None, 0);
+        let rows = build_rows(
+            &folders(&["repo1"]),
+            &["repo1".into()],
+            &[],
+            &[],
+            &[],
+            None,
+            0,
+        );
         assert_eq!(rows.len(), 1);
         assert!(rows[0].exists);
+    }
+
+    #[test]
+    fn folder_exists_when_its_project_has_an_inner_session() {
+        let agents = vec![crate::state::test_inner_entry(
+            "repo1~term",
+            AgentState::Done,
+            5,
+        )];
+        let inner: Vec<String> = vec!["repo1".into(), "repo1~term".into()];
+        let rows = build_rows(
+            &folders(&["repo1", "repo2"]),
+            &[],
+            &inner,
+            &agents,
+            &[],
+            None,
+            10,
+        );
+        // Inner sessions never get rows of their own.
+        assert_eq!(names(&rows), ["repo1", "repo2"]);
+        assert!(rows[0].exists && !rows[1].exists);
+        assert_eq!(rows[0].agent.as_ref().unwrap().state, AgentState::Done);
+        assert_eq!(rows[0].key(), "local:repo1");
     }
 
     #[test]
@@ -332,6 +367,7 @@ mod tests {
         let rows = build_rows(
             &folders(&["repo1"]),
             &["other".into(), "work".into()],
+            &[],
             &[],
             &[],
             Some("work"),
@@ -348,7 +384,15 @@ mod tests {
             test_entry(None, "a", AgentState::Asking, 5),
         ];
         let sessions: Vec<String> = ["plain", "w", "d", "a"].map(String::from).to_vec();
-        let rows = build_rows(&folders(&["folder"]), &sessions, &agents, &[], None, 100);
+        let rows = build_rows(
+            &folders(&["folder"]),
+            &sessions,
+            &[],
+            &agents,
+            &[],
+            None,
+            100,
+        );
         assert_eq!(names(&rows), ["a", "d", "w", "plain", "folder"]);
     }
 
@@ -359,7 +403,7 @@ mod tests {
             test_entry(None, "old", AgentState::Asking, 10),
         ];
         let sessions: Vec<String> = ["new", "old"].map(String::from).to_vec();
-        let rows = build_rows(&[], &sessions, &agents, &[], None, 100);
+        let rows = build_rows(&[], &sessions, &[], &agents, &[], None, 100);
         assert_eq!(names(&rows), ["old", "new"]);
     }
 
@@ -371,7 +415,7 @@ mod tests {
             false,
         );
         let sessions: Vec<String> = vec!["mini/recap".into(), "local".into()];
-        let rows = build_rows(&folders(&[]), &sessions, &[], &[hs], None, 100);
+        let rows = build_rows(&folders(&[]), &sessions, &[], &[], &[hs], None, 100);
         assert_eq!(names(&rows), ["mini/recap", "local", "mini/finter"]);
         assert_eq!(rows[0].agent.as_ref().unwrap().state, AgentState::Done);
         assert!(rows[0].exists);
@@ -389,7 +433,7 @@ mod tests {
             data: None,
         };
         let sessions: Vec<String> = vec!["mini/gone".into()];
-        let rows = build_rows(&[], &sessions, &[], &[hs], None, 0);
+        let rows = build_rows(&[], &sessions, &[], &[], &[hs], None, 0);
         assert_eq!(names(&rows), ["mini/gone"]);
         assert!(matches!(rows[0].target, Target::Remote { .. }));
     }
@@ -401,7 +445,7 @@ mod tests {
             e.msg = "needs ok".into();
             e
         }];
-        let rows = build_rows(&[], &["a".into()], &agents, &[], None, 220);
+        let rows = build_rows(&[], &["a".into()], &[], &agents, &[], None, 220);
         let line = rows[0].line();
         assert!(line.contains('❓') && line.contains("3m") && line.contains("needs ok"));
         assert_eq!(get_match("local:a", rows).unwrap().name, "a");
@@ -410,13 +454,13 @@ mod tests {
     #[test]
     fn remote_row_names_use_host_color() {
         let hs = host_state(&[("recap", false)], vec![], false);
-        let rows = build_rows(&[], &[], &[], &[hs], None, 0);
+        let rows = build_rows(&[], &[], &[], &[], &[hs], None, 0);
         assert!(rows[0].line().contains("\x1b[38;5;208mmini/recap\x1b[0m"));
         let mut hs = host_state(&[("recap", false)], vec![], false);
         hs.host.color = Some(228);
-        let rows = build_rows(&[], &[], &[], &[hs], None, 0);
+        let rows = build_rows(&[], &[], &[], &[], &[hs], None, 0);
         assert!(rows[0].line().contains("\x1b[38;5;228mmini/recap"));
-        let rows = build_rows(&[], &["a".into()], &[], &[], None, 0);
+        let rows = build_rows(&[], &["a".into()], &[], &[], &[], None, 0);
         assert!(!rows[0].line().contains("38;5;208"));
     }
 

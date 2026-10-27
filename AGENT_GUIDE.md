@@ -11,10 +11,11 @@
 ## What It Does
 
 1. Scans configured project root directories
-2. Lists child folders + existing tmux sessions + each `[[hosts]]` entry's projects (`mini/X`) in a fuzzy picker with agent state, wait time and a preview
+2. Lists child folders + existing tmux sessions (inner sessions are not rows) + each `[[hosts]]` entry's projects (`mini/X`) in a fuzzy picker with agent state, wait time and a preview
 3. On selection:
    - **Existing session:** switches/attaches to it
-   - **New local project session:** creates 2 windows in project directory and stays on window 1
+   - **Existing default-server session** (old plain session or wrapper): switches/attaches to it
+   - **Local project:** creates wrapper session `<X>` on the default server with 2 windows in the project directory that run `finter attach X [--term]` (inner sessions `X`, `X~term` on this machine's `-L finter` server)
    - **Remote project:** creates local session `<host>/<X>` with 2 windows that run `ssh -t <alias> finter attach X [--term]`
 4. `finter hook claude` records agent state in pane options; `status`, `next`, `seen` read them
 
@@ -44,14 +45,15 @@ finter/
 
 ### Contracts
 
-- **Pane options:** `@agent`, `@agent_state` (`working|asking|done`), `@agent_since` (unix secs), `@agent_msg`; `@finter_remote=<alias>:<inner session>` on wrapper panes; session option `@finter_colour=colour<N>` (host `color`, default 208) on wrapper sessions. Agent-agnostic: only the hook adapter knows about Claude.
-- **Inner server:** remote sessions live on `tmux -L finter` (socket name overridable with `FINTER_INNER_SOCKET`, used by smoke tests). Sessions are `X`, `X~term` and, for windows added by `finter new-window`, `X~term2`, `X~term3`... (`state::term_slot`).
+- **Pane options:** `@agent`, `@agent_state` (`working|asking|done`), `@agent_since` (unix secs), `@agent_msg`; `@finter_remote=<alias>:<inner session>` on wrapper panes (an EMPTY alias, `:X`, means this machine's inner server and is run locally, never over ssh; the value must stay non-empty for dotfiles bindings); session option `@finter_colour=colour<N>` (host `color`, default 208) on remote wrapper sessions only. Agent-agnostic: only the hook adapter knows about Claude.
+- **`AgentEntry.inner`:** the pane lives on an inner server (this machine's or a host's); pane ids of the default and inner servers can collide, so always use the matching `Socket`. `local_session()` maps inner entries to their wrapper (`X~term` -> `X`, remote -> `host/X`).
+- **Inner server:** every project session lives on `tmux -L finter` of the machine owning the project (see `docs/adr/0001-project-sessions-live-on-the-inner-server.md`) (socket name overridable with `FINTER_INNER_SOCKET`, used by smoke tests). Sessions are `X`, `X~term` and, for windows added by `finter new-window`, `X~term2`, `X~term3`... (`state::term_slot`).
 - **`finter list --json`:** `{"v":1,"projects":[...],"panes":[...]}`; bump `v` on incompatible changes (`remote::LIST_VERSION`).
 - **Cache:** `$XDG_RUNTIME_DIR/finter/<host>.json`, stale after 4s, offline flag keeps last data.
 
 ### Testing seams
 
-Logic is pure and unit-tested: `hook::decide`, `hook::last_assistant_text`, `status::render_status`, `state::pick_next`, `picker::build_rows`, `remote::merge_fetch`, `remote::load_host_with` (takes the fetch function, so ssh is mocked). tmux and ssh execution is not unit-tested; smoke test on a scratch server (`tmux -L finter-test`, `FINTER_INNER_SOCKET`, a fake `HOME`/`XDG_RUNTIME_DIR` with a seeded cache file).
+Logic is pure and unit-tested: `remote::split_remote_tag`, `remote::attach_command` (remote and local forms), `hook::decide`, `hook::last_assistant_text`, `status::render_status`, `state::pick_next`, `picker::build_rows`, `remote::merge_fetch`, `remote::load_host_with` (takes the fetch function, so ssh is mocked). tmux and ssh execution is not unit-tested; smoke test on a scratch server (`tmux -L finter-test`, `FINTER_INNER_SOCKET`, a fake `HOME`/`XDG_RUNTIME_DIR` with a seeded cache file).
 
 ## Configuration
 

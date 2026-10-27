@@ -40,16 +40,16 @@ bind a run-shell -b "finter next"
 set-hook -g client-session-changed 'run-shell -b "finter seen --leave"'
 set-hook -g pane-focus-in 'run-shell -b "finter seen"'
 
-# copy mode: panes that show a remote session enter copy mode on the remote tmux
+# copy mode: wrapper panes (remote or local project) enter copy mode on the inner tmux
 bind [ if -F '#{@finter_remote}' 'run-shell -b "finter copy-mode"' 'copy-mode'
 
-# new window: in a remote project another terminal on the host, else a local one
+# new window: in a wrapper another terminal of the project, else a local one
 bind c if -F '#{@finter_remote}' 'run-shell -b "finter new-window"' 'new-window -c "#{pane_current_path}"'
 
-# kill the current session; for a remote project also its sessions on the host
+# kill the current session; for a wrapper also its inner sessions
 bind x run-shell "finter kill"
 
-# session name in the host's colour for remote projects
+# session name in the host's colour for remote projects (local ones have no @finter_colour: white)
 set -g status-left "#[fg=#{?@finter_colour,#{@finter_colour},white}][#{session_name}]#[default] "
 ```
 
@@ -67,17 +67,17 @@ Register the hook in Claude Code (`~/.claude/settings.json`) for `UserPromptSubm
 }
 ```
 
-Use the same command for the other events. Remote sessions run the hook on the remote machine, so `finter` must be on the `PATH` of the remote tmux server (it inherits the environment of the first `finter attach`).
+Use the same command for the other events. Project sessions run the hook on the machine that owns them, inside the inner server, so `finter` must be on the `PATH` of that `-L finter` server (it inherits the environment of the first `finter attach`, local or over ssh). Every wrapper pane, local ones included, has a non-empty `@finter_remote` (`:X` for this machine), which the `[`, `c` bindings above test.
 
 ## Inner tmux
 
-`finter attach` starts the remote sessions on `tmux -L finter` with an embedded config (`src/inner.conf`) written to `$XDG_RUNTIME_DIR/finter/inner.conf`: status bar off, no prefix key, mouse on, clipboard passthrough, focus events, `extended-keys` with `csi-u`, vi copy mode (`v`, `C-v`, `V`, `y`). The outer tmux owns all keys; the mouse wheel and PgUp/PgDn reach the remote pane.
+`finter attach` starts project sessions (local wrappers and remote hosts alike) on `tmux -L finter` with an embedded config (`src/inner.conf`) written to `$XDG_RUNTIME_DIR/finter/inner.conf`: status bar off, no prefix key, mouse on, clipboard passthrough, focus events, `extended-keys` with `csi-u`, vi copy mode (`v`, `C-v`, `V`, `y`). The outer tmux owns all keys; the mouse wheel and PgUp/PgDn reach the inner pane. `split-window` in a wrapper splits the outer wrapper pane, so the new shell is outside the project session.
 
 ## Behavior Inside/Outside Tmux
 
 - In tmux, `finter` switches client to the selected session.
 - If switch fails, it falls back to `tmux attach -t <session>`.
-- If selected session does not exist, `finter` creates it first.
+- If the selected project has no session, `finter` creates its wrapper first (local projects: `X` on the default server, attached to the inner session).
 
 ## Per-Project Session Workflow
 

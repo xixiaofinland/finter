@@ -36,8 +36,8 @@ Agent-agnostic, written by hooks and read by `status`, `next`, `seen` and the pi
 | `@agent_state` | `working`, `asking` or `done` |
 | `@agent_since` | unix epoch seconds of the last state change |
 | `@agent_msg` | one-line message (about 60 chars) |
-| `@finter_remote` | on wrapper panes only: `<ssh alias>:<inner session>` |
-| `@finter_colour` | session option on wrapper sessions: `colour<N>` from the host's `color` |
+| `@finter_remote` | on wrapper panes only: `<ssh alias>:<inner session>`; an empty alias (`:X`, `:X~term`) means the inner server of this machine, so the value is non-empty on every wrapper pane |
+| `@finter_colour` | session option on remote wrapper sessions: `colour<N>` from the host's `color`; unset on local wrappers (shown white) |
 
 ## `list --json`
 
@@ -56,25 +56,28 @@ Printed by `finter list --json` on each machine (inner server only):
 
 ## Session Naming Rules
 
-- New local session name is based on folder name; `.` and `:` are replaced with `_`.
+- Session name is based on folder name; `.` and `:` are replaced with `_`.
+- Every project session lives on the inner server (`tmux -L finter`) of the machine that owns the project: `X` (Claude) and `X~term` (terminal); windows added with `finter new-window` get `X~term2`, `X~term3`, ... The default server only holds wrappers.
+- A local project `X` is shown as wrapper session `X` (no prefix) on the default server.
 - Remote project `X` on host `mini` is shown locally as session `mini/X` (tmux accepts `/` in session names).
-- On the remote machine the inner sessions are `X` (Claude) and `X~term` (terminal) on `tmux -L finter`; windows added with `finter new-window` get `X~term2`, `X~term3`, ...
-- Existing sessions are shown as-is.
+- Existing default-server sessions (including plain project sessions created by 0.4.x) are shown as-is and keep working.
 
 ## Selection UI
 
 - Rows: icon, name, wait time, message.
 - Order: asking, done, working (oldest wait first within a state), then existing sessions, then folders. The current session is moved to the front.
-- Wrapper sessions (`mini/X`) appear once, as the remote row.
+- Wrapper sessions (`mini/X`) appear once, as the remote row; inner sessions (`X~term`, ...) never get rows of their own. A local folder row is marked `*` when its project has an inner session.
 
 ## Session Creation Details
 
-Local project without a session:
+Selecting a local project: if a default-server session `<name>` exists (an old plain session or an existing wrapper) it is switched to as is. Otherwise a local wrapper is created:
 
-1. `tmux new-session -ds <name> -c <path>` (creates window 1)
-2. `tmux new-window -t <name>:2 -c <path>` (creates window 2)
-3. `tmux select-window -t <name>:1` (keeps window 1 active)
-4. switch/attach client
+1. `tmux new-session -d -s <name> -c <path> "sh -c 'exec finter attach <name>'"` (window 1)
+2. `tmux new-window -d -t <name>: -c <path> "sh -c 'exec finter attach <name> --term'"` (window 2)
+3. `@finter_remote=:X` and `:X~term` set on the two panes (empty alias = this machine); no `@finter_colour`
+4. select window 1, switch/attach client
+
+Both windows attach to inner sessions `X` and `X~term` on this machine's `tmux -L finter`, creating them if missing; if they already exist (opened from another host over ssh) the wrapper attaches to them, so a project has one session wherever it is opened from.
 
 Remote project without a local wrapper:
 
@@ -85,19 +88,21 @@ Remote project without a local wrapper:
 
 `finter attach X [--term[=N]]` (on the remote) resolves X's path from its own roots, writes `inner.conf`, and execs `tmux -L finter -f <conf> new-session -A -s X|X~term|X~termN -c <path>`.
 
-`finter new-window` in a wrapper pane adds a window running `ssh -t <alias> finter attach X --term=N`, where N is the lowest terminal slot no wrapper window of X uses (slot 1 is `X~term`), tags it with `@finter_remote=<alias>:X~termN` and selects it. Outside a wrapper it runs a plain `new-window` in the pane's directory.
+`finter new-window` in a wrapper pane adds a window running `ssh -t <alias> finter attach X --term=N` (local wrapper: `exec finter attach X --term=N`, started in the pane's directory), where N is the lowest terminal slot no wrapper window of X uses (slot 1 is `X~term`), tags it with `@finter_remote=<alias>:X~termN` and selects it. Outside a wrapper it runs a plain `new-window` in the pane's directory.
 
 ## Status, Next, Seen
 
-- `status`: local agent panes plus every host's cached panes; excludes the current session; asking first (red background, remote colour differs), then done (green), at most 3 names then `+N`, `⚙N` for working, `host ✕` for offline hosts. Prints nothing when idle.
-- `next`: oldest asking, else oldest done, across local and remote; switches to the local wrapper (created if missing); `X~term[N]` selects the wrapper's terminal window. Without a match it shows `nothing waiting`.
-- `seen`: clears `done` for the current session, and with `--leave` also for `#{client_last_session}`, whose `asking` is demoted to `done` (an interrupted permission prompt fires no hook, so leaving is the signal; the `done` reminder stays until the next visit) (used by `client-session-changed`; `pane-focus-in` clears only the current one). Remote sessions are cleared with a fire-and-forget ssh `if-shell` on `tmux -L finter`, and the local cache is updated at once.
+- `status`: local agent panes (default server and inner server) plus every host's cached panes; excludes the current session; asking first (red background, remote colour differs), then done (green), at most 3 names then `+N`, `⚙N` for working, `host ✕` for offline hosts. Prints nothing when idle.
+- `next`: oldest asking, else oldest done, across local and remote; switches to the local wrapper (created if missing, for local inner entries too); `X~term[N]` selects the wrapper's terminal window. Without a match it shows `nothing waiting`.
+- `seen`: clears `done` for the current session, and with `--leave` also for `#{client_last_session}`, whose `asking` is demoted to `done` (an interrupted permission prompt fires no hook, so leaving is the signal; the `done` reminder stays until the next visit) (used by `client-session-changed`; `pane-focus-in` clears only the current one). Remote sessions are cleared with a fire-and-forget ssh `if-shell` on `tmux -L finter`, and the local cache is updated at once. For a local session the panes in that session on the default server (old plain sessions) and the panes of the project's inner sessions on this machine's `-L finter` server are cleared.
 
 ## Known Caveats
 
 - Folder-name collisions across roots can map to the same session name.
 - A project whose name ends in `~term` or `~termN` (N >= 2) collides with a terminal session of the project without that suffix.
 - Project names containing backslashes are not supported by the remote attach quoting.
+- Pane ids (`%3`) are per tmux server and can collide between the default and the inner server; code always pairs a pane id with its socket (`AgentEntry.inner`).
+- `split-window` in a wrapper splits the outer wrapper pane, not the project session (see `docs/adr/0001-project-sessions-live-on-the-inner-server.md`).
 - `inner.conf` is applied when the inner tmux server starts; changing it later needs a restart of that server (`tmux -L finter kill-server`) to take effect.
 - The runtime directory (`$XDG_RUNTIME_DIR/finter`, or `<tmp>/finter-<uid>`) is created with mode 0700.
 - Only immediate subdirectories are considered projects.

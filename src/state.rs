@@ -59,6 +59,9 @@ pub(crate) struct AgentEntry {
     /// Unix epoch seconds of the last state change.
     pub(crate) since: u64,
     pub(crate) msg: String,
+    /// The pane lives on an inner (`-L finter`) server, not the default one. Pane ids of
+    /// the two local servers can collide (`%3` on both), so consumers must pick the socket.
+    pub(crate) inner: bool,
 }
 
 impl AgentEntry {
@@ -71,10 +74,12 @@ impl AgentEntry {
         project_of(&self.session).len() < self.session.len()
     }
 
-    /// Session name on this machine that shows the entry: `mini/X` or `X`.
+    /// Session on this machine's default server that shows the entry: the wrapper
+    /// (`mini/X`, or `X` for an inner entry of this machine), else the session itself.
     pub(crate) fn local_session(&self) -> String {
         match &self.host {
             Some(host) => wrapper_session(host, self.project()),
+            None if self.inner => self.project().to_string(),
             None => self.session.clone(),
         }
     }
@@ -163,6 +168,17 @@ pub(crate) fn test_entry(
         state,
         since,
         msg: String::new(),
+        // Entries of other hosts always come from their inner server.
+        inner: host.is_some(),
+    }
+}
+
+/// An agent entry on this machine's inner server.
+#[cfg(test)]
+pub(crate) fn test_inner_entry(session: &str, state: AgentState, since: u64) -> AgentEntry {
+    AgentEntry {
+        inner: true,
+        ..test_entry(None, session, state, since)
     }
 }
 
@@ -233,6 +249,12 @@ mod tests {
         assert_eq!(e.local_session(), "mini/recap");
         let local = test_entry(None, "recap", AgentState::Asking, 1);
         assert_eq!(local.local_session(), "recap");
+        let inner = test_inner_entry("recap~term", AgentState::Asking, 1);
+        assert_eq!(inner.local_session(), "recap");
+        assert_eq!(
+            test_inner_entry("recap", AgentState::Done, 1).local_session(),
+            "recap"
+        );
         let third = test_entry(Some("mini"), "recap~term3", AgentState::Done, 1);
         assert!(third.is_term());
         assert_eq!(third.local_session(), "mini/recap");

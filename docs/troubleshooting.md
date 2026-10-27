@@ -95,6 +95,14 @@ Fix:
 
 - Run the same command in a shell to read the error.
 
+## Old project sessions from 0.4.x are still there
+
+Before this change local projects were plain sessions on the default server. They keep working and still show up in the picker, but they are separate from the project's inner session. When you are done with one, kill it (`tmux kill-session -t <name>`); picking the project again then creates the wrapper `<name>` around the inner sessions.
+
+## macOS: `open`, Keychain or clipboard behave differently in a project session
+
+The inner server keeps the environment of the `finter attach` that started it. If it was first started over ssh, its sessions carry that ssh session's environment, so GUI-bound tools (`open`, Keychain, the clipboard) may behave differently than in a session started locally. Restart the inner server from a local shell if that matters: `tmux -L finter kill-server` (this ends all project sessions on this machine).
+
 ## Agent badges never appear
 
 Cause:
