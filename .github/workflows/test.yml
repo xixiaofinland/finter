@@ -23,5 +23,8 @@ jobs:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
       - name: Run tests
         run: cargo test --all-features --locked
