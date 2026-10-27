@@ -4,9 +4,8 @@ use crate::state::{
     age_secs, best_per_project, format_age, wrapper_session, AgentEntry, AgentState,
 };
 use crate::status::{local_target, parse_wrapper, remote_target};
-use ansi_to_tui::IntoText;
-use ratatui_core::style::{Color, Modifier};
-use ratatui_core::text::Line;
+use ratatui_core::style::{Color, Modifier, Style};
+use ratatui_core::text::{Line, Span};
 use skim::prelude::*;
 use std::error::Error;
 
@@ -53,39 +52,6 @@ impl Row {
             None => 4,
         }
     }
-
-    fn line(&self) -> String {
-        let icon = |state: Option<AgentState>| {
-            let (icon, color) = match state {
-                Some(AgentState::Asking) => ("❓", "\x1b[31m"),
-                Some(AgentState::Done) => ("✅", "\x1b[32m"),
-                Some(AgentState::Working) => ("⚙ ", "\x1b[33m"),
-                None if self.exists => ("* ", ""),
-                None => ("  ", ""),
-            };
-            format!("{color}{icon}\x1b[0m")
-        };
-        let mut icons: String = match self.states.as_slice() {
-            [] => icon(None),
-            states => states.iter().map(|s| icon(Some(*s))).collect(),
-        };
-        // Every icon is two cells wide.
-        icons.push_str(&"  ".repeat(self.icon_slots.saturating_sub(self.states.len().max(1))));
-        let pad = " ".repeat(self.name_width.saturating_sub(self.name.chars().count()));
-        let (age, msg) = match &self.agent {
-            Some(a) => (format_age(age_secs(self.now, a.since)), a.msg.as_str()),
-            None => (String::new(), ""),
-        };
-        // Same colour as the wrapper session's name in the tmux status-left.
-        let name_color = match &self.target {
-            Target::Remote { host, .. } => format!("\x1b[38;5;{}m", host.color()),
-            Target::Local { .. } => String::new(),
-        };
-        format!(
-            "{icons} {name_color}{}\x1b[0m{pad}  \x1b[2m{age:>4}  {msg}\x1b[0m",
-            self.name
-        )
-    }
 }
 
 impl SkimItem for Row {
@@ -93,25 +59,43 @@ impl SkimItem for Row {
         Cow::Borrowed(&self.name)
     }
 
+    // Spans set only a foreground or DIM, never a background or reset colour,
+    // so skim's full-row highlight shows through the whole row.
     fn display(&self, _context: DisplayContext) -> Line<'_> {
-        let mut line = self
-            .line()
-            .into_text()
-            .ok()
-            .and_then(|t| t.lines.into_iter().next())
-            .unwrap_or_default();
-        // ansi-to-tui turns `\x1b[0m` into explicit reset colours, which would
-        // punch holes in skim's full-row highlight; inherit the row style instead.
-        // Its "remove every modifier" would likewise strip the row's own modifiers.
-        let inherit = |c: Option<Color>| c.filter(|c| *c != Color::Reset);
-        for span in &mut line.spans {
-            let style = &mut span.style;
-            style.fg = inherit(style.fg);
-            style.bg = inherit(style.bg);
-            style.underline_color = inherit(style.underline_color);
-            style.sub_modifier = Modifier::empty();
+        let icon = |state: Option<AgentState>| match state {
+            Some(AgentState::Asking) => Span::styled("❓", Style::new().fg(Color::Red)),
+            Some(AgentState::Done) => Span::styled("✅", Style::new().fg(Color::Green)),
+            Some(AgentState::Working) => Span::styled("⚙ ", Style::new().fg(Color::Yellow)),
+            None if self.exists => Span::raw("* "),
+            None => Span::raw("  "),
+        };
+        let mut spans: Vec<Span> = match self.states.as_slice() {
+            [] => vec![icon(None)],
+            states => states.iter().map(|s| icon(Some(*s))).collect(),
+        };
+        // Every icon is two cells wide.
+        let icon_pad = "  ".repeat(self.icon_slots.saturating_sub(self.states.len().max(1)));
+        if !icon_pad.is_empty() {
+            spans.push(Span::raw(icon_pad));
         }
-        line
+        spans.push(Span::raw(" "));
+        // Same colour as the wrapper session's name in the tmux status-left.
+        let name_style = match &self.target {
+            Target::Remote { host, .. } => Style::new().fg(Color::Indexed(host.color())),
+            Target::Local { .. } => Style::new(),
+        };
+        spans.push(Span::styled(self.name.as_str(), name_style));
+        let pad = " ".repeat(self.name_width.saturating_sub(self.name.chars().count()));
+        spans.push(Span::raw(format!("{pad}  ")));
+        let (age, msg) = match &self.agent {
+            Some(a) => (format_age(age_secs(self.now, a.since)), a.msg.as_str()),
+            None => (String::new(), ""),
+        };
+        spans.push(Span::styled(
+            format!("{age:>4}  {msg}"),
+            Style::new().add_modifier(Modifier::DIM),
+        ));
+        Line::from(spans)
     }
 
     fn output(&self) -> Cow<'_, str> {
@@ -501,7 +485,7 @@ mod tests {
             e
         }];
         let rows = build_rows(&[], &["a".into()], &[], &agents, &[], None, 220);
-        let line = rows[0].line();
+        let line = plain(&rows[0]);
         assert!(line.contains('❓') && line.contains("3m") && line.contains("needs ok"));
         assert_eq!(get_match("local:a", rows).unwrap().name, "a");
     }
@@ -531,7 +515,7 @@ mod tests {
         );
         let rows = build_rows(&[], &[], &[], &[], &[hs], None, 220);
         let line = rows[0].display(DisplayContext::default());
-        // `\x1b[0m` must not become a reset background, or the full-row
+        // No span may set a background or reset colour, or the full-row
         // highlight would show gaps behind the name, age and message.
         for span in &line.spans {
             assert_eq!(span.style.bg, None, "{span:?}");
@@ -562,6 +546,83 @@ mod tests {
         };
         assert_eq!(cell_of("mini").fg, Color::Indexed(208));
         assert!(cell_of("3m").modifier.contains(Modifier::DIM));
+    }
+
+    fn spans(row: &Row) -> Vec<(String, Style)> {
+        let line = row.display(DisplayContext::default());
+        line.spans
+            .iter()
+            .map(|s| (s.content.to_string(), s.style))
+            .collect()
+    }
+
+    #[test]
+    fn display_builds_styled_spans_per_column() {
+        let dim = Style::new().add_modifier(Modifier::DIM);
+        let hs = host_state(
+            &[("recap", true), ("finter", false)],
+            vec![pane("recap", AgentState::Done, 40)],
+            false,
+        );
+        let mut asking = test_entry(None, "a", AgentState::Asking, 100);
+        asking.msg = "needs ok".into();
+        let mut working = test_entry(None, "w", AgentState::Working, 160);
+        working.msg = "busy".into();
+        let sessions: Vec<String> = ["a", "w", "plain"].map(String::from).to_vec();
+        let rows = build_rows(
+            &folders(&["folder"]),
+            &sessions,
+            &[],
+            &[asking, working],
+            &[hs],
+            None,
+            220,
+        );
+        assert_eq!(
+            names(&rows),
+            ["a", "mini/recap", "w", "plain", "folder", "mini/finter"]
+        );
+        let s = |text: &str, style: Style| (text.to_string(), style);
+        let red = Style::new().fg(Color::Red);
+        let green = Style::new().fg(Color::Green);
+        let yellow = Style::new().fg(Color::Yellow);
+        let host = Style::new().fg(Color::Indexed(208));
+        let none = Style::new();
+        // Names are padded to the widest, `mini/recap` and `mini/finter` (11).
+        assert_eq!(
+            spans(&rows[0]),
+            [
+                s("❓", red),
+                s(" ", none),
+                s("a", none),
+                s("            ", none),
+                s("  2m  needs ok", dim),
+            ]
+        );
+        assert_eq!(
+            spans(&rows[1]),
+            [
+                s("✅", green),
+                s(" ", none),
+                s("mini/recap", host),
+                s("   ", none),
+                s("  3m  hello", dim),
+            ]
+        );
+        assert_eq!(spans(&rows[2])[0], s("⚙ ", yellow));
+        assert_eq!(spans(&rows[2])[4], s("  1m  busy", dim));
+        assert_eq!(spans(&rows[3])[0], s("* ", none));
+        assert_eq!(
+            spans(&rows[4]),
+            [
+                s("  ", none),
+                s(" ", none),
+                s("folder", none),
+                s("       ", none),
+                s("      ", dim),
+            ]
+        );
+        assert_eq!(spans(&rows[5])[2], s("mini/finter", host));
     }
 
     #[test]
@@ -638,13 +699,17 @@ mod tests {
     fn remote_row_names_use_host_color() {
         let hs = host_state(&[("recap", false)], vec![], false);
         let rows = build_rows(&[], &[], &[], &[], &[hs], None, 0);
-        assert!(rows[0].line().contains("\x1b[38;5;208mmini/recap\x1b[0m"));
+        let name_fg = |row: &Row, name: &str| {
+            let (_, style) = spans(row).into_iter().find(|(t, _)| t == name).unwrap();
+            style.fg
+        };
+        assert_eq!(name_fg(&rows[0], "mini/recap"), Some(Color::Indexed(208)));
         let mut hs = host_state(&[("recap", false)], vec![], false);
         hs.host.color = Some(228);
         let rows = build_rows(&[], &[], &[], &[], &[hs], None, 0);
-        assert!(rows[0].line().contains("\x1b[38;5;228mmini/recap"));
+        assert_eq!(name_fg(&rows[0], "mini/recap"), Some(Color::Indexed(228)));
         let rows = build_rows(&[], &["a".into()], &[], &[], &[], None, 0);
-        assert!(!rows[0].line().contains("38;5;208"));
+        assert_eq!(name_fg(&rows[0], "a"), None);
     }
 
     #[test]

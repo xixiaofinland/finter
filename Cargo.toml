@@ -11,7 +11,6 @@ documentation = "https://docs.rs/finter"
 
 [dependencies]
 skim = { version = "5.8.0", default-features = false }
-ansi-to-tui = "8.0.1"
 ratatui-core = "0.1.2"
 home = "0.5.5"
 clap = { version = "4.4.4", features = ["derive"] }
