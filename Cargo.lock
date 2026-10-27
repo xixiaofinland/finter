@@ -647,7 +647,6 @@ checksum = "80bb028c8b4148c9ee0cca68fcd9add6044e81d3619f48577ddf13a263d047a2"
 name = "finter"
 version = "0.8.0"
 dependencies = [
- "ansi-to-tui",
  "assert_cmd",
  "clap",
  "home",

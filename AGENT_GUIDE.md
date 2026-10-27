@@ -120,7 +120,7 @@ Edit `badge` and `render_status` in `src/status.rs` and their tests.
 
 ## Dependencies to Watch
 
-- `skim 5.x` (default features off): Fuzzy finder (popup UI; preview command gets `{}` shell-quoted). Rows render as ratatui `Line`s parsed from ANSI with `ansi-to-tui`
+- `skim 5.x` (default features off): Fuzzy finder (popup UI; preview command gets `{}` shell-quoted). Rows render as ratatui `Line`s built from styled `Span`s (`ratatui-core`)
 - `clap 4.x`: CLI parsing (derive macros)
 - `toml 0.8`, `serde_json`: config and JSON
 - `home`: home directory detection
