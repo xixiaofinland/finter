@@ -884,4 +884,50 @@ mod tests {
         assert!(list.projects.iter().all(|p| !p.session_exists));
         assert!(list.panes.is_empty());
     }
+
+    // Since 0.7 the inner server draws the window list, so its naming rule is what the
+    // user sees: windows must keep the project directory name, not the running command.
+    #[test]
+    fn inner_windows_are_named_after_their_directory() {
+        let base = std::env::temp_dir().join(format!("finter-names-{}", std::process::id()));
+        let project = base.join("myproj");
+        fs::create_dir_all(&project).unwrap();
+        let conf = base.join("inner.conf");
+        fs::write(&conf, inner_conf_text()).unwrap();
+        let socket = base.join("sock");
+        let tmux = |args: &[&str]| {
+            Command::new("tmux")
+                .arg("-S")
+                .arg(&socket)
+                .arg("-f")
+                .arg(&conf)
+                .args(args)
+                .env_remove("TMUX")
+                .output()
+                .unwrap()
+        };
+        let created = tmux(&[
+            "new-session",
+            "-d",
+            "-s",
+            "t",
+            "-c",
+            project.to_str().unwrap(),
+            "sleep 30",
+        ]);
+        assert!(created.status.success(), "{created:?}");
+        // automatic-rename runs on a timer; give it a few ticks to settle.
+        let mut name = String::new();
+        for _ in 0..30 {
+            std::thread::sleep(Duration::from_millis(100));
+            let out = tmux(&["display", "-p", "-t", "=t:", "#{window_name}"]);
+            name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if name == "myproj" {
+                break;
+            }
+        }
+        tmux(&["kill-server"]);
+        let _ = fs::remove_dir_all(&base);
+        assert_eq!(name, "myproj");
+    }
 }
