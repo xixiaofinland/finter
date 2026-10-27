@@ -68,6 +68,7 @@ Printed by `finter list --json` on each machine (inner server only):
 - Rows: icon, name, wait time, message. A project with several tracked panes shows one icon per pane in window order; the rest of the row uses the most urgent one.
 - Order: asking, done, working (oldest wait first within a state), then existing sessions, then folders. The current session is moved to the front.
 - Wrapper sessions (`mini/X`) appear once, as the remote row; inner sessions never get rows of their own. A local folder row is marked `*` when its project has an inner session.
+- The current row is highlighted across its full width, and moving past the last row wraps to the first (and back).
 
 ## Session Creation Details
 
