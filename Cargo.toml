@@ -10,7 +10,9 @@ homepage = "https://github.com/xixiaofinland/finter"
 documentation = "https://docs.rs/finter"
 
 [dependencies]
-skim = "0.10.4"
+skim = { version = "5.8.0", default-features = false }
+ansi-to-tui = "8.0.1"
+ratatui-core = "0.1.2"
 home = "0.5.5"
 clap = { version = "4.4.4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
@@ -20,4 +22,3 @@ serde_json = "1.0.154"
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "2"
-rand = "0.8"

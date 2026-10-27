@@ -4,8 +4,10 @@ use crate::state::{
     age_secs, best_per_project, format_age, wrapper_session, AgentEntry, AgentState,
 };
 use crate::status::{local_target, parse_wrapper, remote_target};
+use ansi_to_tui::IntoText;
+use ratatui_core::text::Line;
 use skim::prelude::*;
-use std::{borrow::Cow, error::Error};
+use std::error::Error;
 
 /// What selecting a row does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,8 +79,12 @@ impl SkimItem for Row {
         Cow::Borrowed(&self.name)
     }
 
-    fn display<'a>(&'a self, _context: DisplayContext<'a>) -> AnsiString<'a> {
-        AnsiString::parse(&self.line())
+    fn display(&self, _context: DisplayContext) -> Line<'_> {
+        self.line()
+            .into_text()
+            .ok()
+            .and_then(|t| t.lines.into_iter().next())
+            .unwrap_or_default()
     }
 
     fn output(&self) -> Cow<'_, str> {
@@ -233,27 +239,27 @@ pub(crate) fn select_in_skim(
         .unwrap_or_else(|_| "finter".to_string());
     let preview_cmd = format!("{} preview {{}}", crate::tmux::shell_quote(&exe));
 
-    let options = SkimOptionsBuilder::default()
-        .height(Some("100%"))
+    let mut builder = SkimOptionsBuilder::default();
+    builder
+        .height("100%")
         .multi(false)
-        .color(Some("dark"))
-        .preview(Some(&preview_cmd))
-        .preview_window(Some("right:50%"))
-        .header(header)
-        .build()?;
+        .color("dark")
+        .preview(preview_cmd)
+        .preview_window("right:50%");
+    if let Some(h) = header {
+        builder.header(h);
+    }
+    let options = builder.build()?;
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
-    for r in rows.into_iter() {
-        let _ = tx_item.send(Arc::new(r));
-    }
+    let items: Vec<Arc<dyn SkimItem>> = rows
+        .into_iter()
+        .map(|r| Arc::new(r) as Arc<dyn SkimItem>)
+        .collect();
+    let _ = tx_item.send(items);
     drop(tx_item);
 
-    let skim_output = Skim::run_with(&options, Some(rx_item));
-
-    let skim_result = match skim_output {
-        Some(value) => value,
-        None => return Err("Skim internal error.".into()),
-    };
+    let skim_result = Skim::run_with(options, Some(rx_item))?;
 
     if skim_result.is_abort {
         return Err("No selection made.".into());
@@ -445,6 +451,21 @@ mod tests {
         let line = rows[0].line();
         assert!(line.contains('❓') && line.contains("3m") && line.contains("needs ok"));
         assert_eq!(get_match("local:a", rows).unwrap().name, "a");
+    }
+
+    #[test]
+    fn display_shows_the_row_line_with_its_colours() {
+        let agents = vec![test_entry(None, "a", AgentState::Asking, 40)];
+        let rows = build_rows(&[], &["a".into()], &[], &agents, &[], None, 220);
+        let line = rows[0].display(DisplayContext::default());
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.starts_with("❓ a"), "{text:?}");
+        let icon = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains('❓'))
+            .unwrap();
+        assert_eq!(icon.style.fg, Some(ratatui_core::style::Color::Red));
     }
 
     #[test]
