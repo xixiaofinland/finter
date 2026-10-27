@@ -25,8 +25,12 @@ pub(crate) struct Row {
     pub(crate) exists: bool,
     /// Most urgent agent in the project.
     pub(crate) agent: Option<AgentEntry>,
+    /// State of every tracked pane (Claude, `finter watch`) in window order.
+    states: Vec<AgentState>,
     now: u64,
     name_width: usize,
+    /// Icons of the row with the most tracked panes, so names line up.
+    icon_slots: usize,
 }
 
 impl Row {
@@ -50,13 +54,22 @@ impl Row {
     }
 
     fn line(&self) -> String {
-        let (icon, color) = match self.agent.as_ref().map(|a| a.state) {
-            Some(AgentState::Asking) => ("❓", "\x1b[31m"),
-            Some(AgentState::Done) => ("✅", "\x1b[32m"),
-            Some(AgentState::Working) => ("⚙ ", "\x1b[33m"),
-            None if self.exists => ("* ", ""),
-            None => ("  ", ""),
+        let icon = |state: Option<AgentState>| {
+            let (icon, color) = match state {
+                Some(AgentState::Asking) => ("❓", "\x1b[31m"),
+                Some(AgentState::Done) => ("✅", "\x1b[32m"),
+                Some(AgentState::Working) => ("⚙ ", "\x1b[33m"),
+                None if self.exists => ("* ", ""),
+                None => ("  ", ""),
+            };
+            format!("{color}{icon}\x1b[0m")
         };
+        let mut icons: String = match self.states.as_slice() {
+            [] => icon(None),
+            states => states.iter().map(|s| icon(Some(*s))).collect(),
+        };
+        // Every icon is two cells wide.
+        icons.push_str(&"  ".repeat(self.icon_slots.saturating_sub(self.states.len().max(1))));
         let pad = " ".repeat(self.name_width.saturating_sub(self.name.chars().count()));
         let (age, msg) = match &self.agent {
             Some(a) => (format_age(age_secs(self.now, a.since)), a.msg.as_str()),
@@ -68,7 +81,7 @@ impl Row {
             Target::Local { .. } => String::new(),
         };
         format!(
-            "{color}{icon}\x1b[0m {name_color}{}\x1b[0m{pad}  \x1b[2m{age:>4}  {msg}\x1b[0m",
+            "{icons} {name_color}{}\x1b[0m{pad}  \x1b[2m{age:>4}  {msg}\x1b[0m",
             self.name
         )
     }
@@ -92,13 +105,25 @@ impl SkimItem for Row {
     }
 }
 
-fn agents_of(entries: &[AgentEntry], host: Option<&str>, project: &str) -> Option<AgentEntry> {
-    let matching: Vec<AgentEntry> = entries
+/// Index for ordering `1`, `2`, `10` and `%3`, `%12` numerically; anything else last.
+fn index_of(id: &str) -> u64 {
+    id.trim_start_matches('%').parse().unwrap_or(u64::MAX)
+}
+
+/// The project's most urgent agent, and every tracked pane's state in window order.
+fn agents_of(
+    entries: &[AgentEntry],
+    host: Option<&str>,
+    project: &str,
+) -> (Option<AgentEntry>, Vec<AgentState>) {
+    let mut matching: Vec<AgentEntry> = entries
         .iter()
         .filter(|e| e.host.as_deref() == host && e.project() == project)
         .cloned()
         .collect();
-    best_per_project(&matching).into_iter().next()
+    matching.sort_by_key(|e| (index_of(&e.window), index_of(&e.pane_id)));
+    let states = matching.iter().map(|e| e.state).collect();
+    (best_per_project(&matching).into_iter().next(), states)
 }
 
 /// Assemble picker rows: local sessions and folders plus every host's projects.
@@ -115,13 +140,18 @@ pub(crate) fn build_rows(
 ) -> Vec<Row> {
     let configured: Vec<HostConfig> = hosts.iter().map(|h| h.host.clone()).collect();
     let mut rows: Vec<Row> = Vec::new();
-    let mk = |name: String, target: Target, exists: bool, agent: Option<AgentEntry>| Row {
+    let mk = |name: String,
+              target: Target,
+              exists: bool,
+              (agent, states): (Option<AgentEntry>, Vec<AgentState>)| Row {
         name,
         target,
         exists,
         agent,
+        states,
         now,
         name_width: 0,
+        icon_slots: 0,
     };
 
     // Wrapper sessions (`mini/X`) are shown through the remote rows below.
@@ -206,7 +236,11 @@ pub(crate) fn build_rows(
         .map(|r| r.name.chars().count())
         .max()
         .unwrap_or(0);
-    rows.iter_mut().for_each(|r| r.name_width = width);
+    let slots = rows.iter().map(|r| r.states.len()).max().unwrap_or(0);
+    rows.iter_mut().for_each(|r| {
+        r.name_width = width;
+        r.icon_slots = slots;
+    });
     rows
 }
 
@@ -466,6 +500,65 @@ mod tests {
             .find(|s| s.content.contains('❓'))
             .unwrap();
         assert_eq!(icon.style.fg, Some(ratatui_core::style::Color::Red));
+    }
+
+    fn plain(row: &Row) -> String {
+        let line = row.display(DisplayContext::default());
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn row_shows_one_icon_per_tracked_pane_in_window_order() {
+        let pane_in = |window: &str, state| AgentEntry {
+            window: window.into(),
+            ..crate::state::test_inner_entry("finter", state, 50)
+        };
+        let agents = vec![
+            pane_in("10", AgentState::Asking),
+            pane_in("2", AgentState::Done),
+            pane_in("1", AgentState::Working),
+        ];
+        let rows = build_rows(
+            &folders(&["finter", "solo"]),
+            &[],
+            &["finter".into()],
+            &agents,
+            &[],
+            None,
+            100,
+        );
+        assert_eq!(names(&rows), ["finter", "solo"]);
+        assert!(
+            plain(&rows[0]).starts_with("⚙ ✅❓ finter"),
+            "{:?}",
+            plain(&rows[0])
+        );
+        // The most urgent pane still drives the row's group.
+        assert_eq!(rows[0].agent.as_ref().unwrap().state, AgentState::Asking);
+        // Other rows pad the icon column so names stay aligned.
+        assert!(
+            plain(&rows[1]).starts_with("       solo"),
+            "{:?}",
+            plain(&rows[1])
+        );
+    }
+
+    #[test]
+    fn remote_row_shows_its_host_panes_icons() {
+        let mut second = pane("recap", AgentState::Working, 40);
+        second.window = "2".into();
+        second.pane = "%2".into();
+        let hs = host_state(
+            &[("recap", true)],
+            vec![second, pane("recap", AgentState::Done, 40)],
+            false,
+        );
+        let rows = build_rows(&[], &[], &[], &[], &[hs], None, 100);
+        assert!(
+            plain(&rows[0]).starts_with("✅⚙  mini/recap"),
+            "{:?}",
+            plain(&rows[0])
+        );
     }
 
     #[test]

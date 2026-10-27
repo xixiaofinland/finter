@@ -5,6 +5,7 @@ mod remote;
 mod state;
 mod status;
 mod tmux;
+mod watch;
 
 use config::{get_folders, load_config, load_project_paths};
 use picker::{build_rows, get_match, offline_header, select_in_skim, Target};
@@ -14,6 +15,7 @@ use tmux::{get_current_session, get_sessions, run_tmux_with_args, Socket};
 pub use config::save_paths;
 pub use hook::run_hook;
 pub use status::{run_kill, run_next, run_preview, run_seen, run_status};
+pub use watch::run_watch;
 pub type MyResult<T> = Result<T, Box<dyn Error>>;
 
 pub fn run_finter() -> Result<(), Box<dyn Error>> {
