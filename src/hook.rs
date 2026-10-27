@@ -10,8 +10,8 @@ use std::{
 };
 
 /// Upper bound for each tmux call; the agent waits for hooks, so never hang.
-const TMUX_DEADLINE: Duration = Duration::from_secs(2);
-const MSG_MAX_CHARS: usize = 60;
+pub(crate) const TMUX_DEADLINE: Duration = Duration::from_secs(2);
+pub(crate) const MSG_MAX_CHARS: usize = 60;
 /// How much of the transcript's end is scanned for the last assistant text.
 const TRANSCRIPT_TAIL_BYTES: u64 = 512 * 1024;
 

@@ -46,6 +46,12 @@ enum Command {
     },
     /// Attach to (or create) the inner tmux session for a project; run by wrappers, locally or over ssh
     Attach { name: String },
+    /// Run a command, showing it in the current pane as `working` until it ends, then `done`
+    Watch {
+        /// Command and its arguments (after `--`)
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
 }
 
 // --------------------------------------------------
@@ -87,6 +93,8 @@ fn run(args: Args) -> finter::MyResult<()> {
         }
         (Some(Command::List { json }), _) => finter::run_list(json),
         (Some(Command::Attach { name }), _) => finter::run_attach(&name),
+        // The command's exit code is passed through, so it is transparent in scripts.
+        (Some(Command::Watch { command }), _) => std::process::exit(finter::run_watch(&command)),
         (None, None) => finter::run_finter(),
         (None, Some(directories)) => finter::save_paths(&directories),
     }
