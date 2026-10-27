@@ -548,7 +548,7 @@ mod tests {
         assert!(cell_of("3m").modifier.contains(Modifier::DIM));
     }
 
-    fn spans(row: &Row) -> Vec<(String, ratatui_core::style::Style)> {
+    fn spans(row: &Row) -> Vec<(String, Style)> {
         let line = row.display(DisplayContext::default());
         line.spans
             .iter()
@@ -558,7 +558,6 @@ mod tests {
 
     #[test]
     fn display_builds_styled_spans_per_column() {
-        use ratatui_core::style::Style;
         let dim = Style::new().add_modifier(Modifier::DIM);
         let hs = host_state(
             &[("recap", true), ("finter", false)],
