@@ -7,6 +7,7 @@
 | `finter` | Run the picker |
 | `finter -d <ABS_PATH> [ABS_PATH ...]` | Save project roots |
 | `finter hook claude` | Record Claude Code state in the current tmux pane (stdin: hook JSON) |
+| `finter watch -- <command> [args...]` | Run a command, marking the current tmux pane `working` until it ends and `done` after; exits with the command's code |
 | `finter status [--current <name>]` | Print the status-bar segment (waiting agents on this machine and hosts); `--current` names the session to leave out, default: ask tmux |
 | `finter next` | Jump to the oldest asking agent, then the oldest done one |
 | `finter seen [--leave]` | Clear `done` for the current session; with `--leave` also clear the previous one's `done` and demote its `asking` to `done` |
@@ -76,6 +77,8 @@ Each row shows `icon name wait-time message`:
 | `*` | session exists, no agent state |
 | blank | folder without session |
 
+A project with several tracked panes (Claude, `finter watch`) shows one icon per pane in window order, e.g. `⚙ ✅`; sorting, wait time and message follow the most urgent one.
+
 The right half previews the last lines of the pane (`finter preview`).
 
 ## Local Projects
@@ -106,5 +109,9 @@ Killing the wrapper with plain `kill-session` leaves the inner session running, 
 Claude can end its turn while a background command, async agent or Monitor still runs, for example a CI watch, and is woken when it finishes. On `Stop` the hook reads the transcript tail, and while a background task has no `<task-notification>` yet the pane stays `working`; the `Stop` after the wake-up sets `done`. A background process that never exits (a dev server) keeps the pane `working`.
 
 With `$TMUX_PANE` unset (for example headless `claude -p`) the hook does nothing. It always exits 0 and only writes to stderr on errors.
+
+### Scripts
+
+`finter watch -- <command> [args...]` tracks any long-running command, e.g. `env CLAUDE_CODE_OAUTH_TOKEN=(cat ~/.config/claude-accounts/dev) finter watch -- issue-loop`. It sets the pane to `working` (`@agent=watch`, message = the command line) and, when the command ends, to `done`, whatever the exit code. Ctrl-C reaches the command; `finter watch` survives it to mark `done` and exits with the command's code (128+signal when killed). Without `$TMUX_PANE` it just runs the command, and tmux errors never change the exit code. `finter seen` clears its `done` like Claude's.
 
 `finter status` shows `❓name` (asking, red background), `✅name` (done, green), `⚙N` (working count), at most 3 names then `+N`, and `host ✕` when a host is unreachable. Remote items use other colours. The current session is never badged.

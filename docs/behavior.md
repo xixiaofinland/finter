@@ -10,6 +10,7 @@
 - `src/tmux.rs`: tmux runner for the default and inner (`-L finter`) server, pane listing, pane-option argv builders
 - `src/state.rs`: `AgentState`, `AgentEntry`, ordering, `next` selection, age formatting
 - `src/hook.rs`: `finter hook claude`
+- `src/watch.rs`: `finter watch`
 - `src/remote.rs`: `list --json` schema, ssh calls, host cache, `attach`, wrapper-session creation, `inner.conf`
 - `src/status.rs`: `status`, `next`, `seen`, `preview`, `kill`
 - `src/picker.rs`: picker rows and the skim UI
@@ -28,11 +29,11 @@ Runtime path of the picker:
 
 ## Pane Options Contract
 
-Agent-agnostic, written by hooks and read by `status`, `next`, `seen` and the picker:
+Agent-agnostic, written by hooks and `finter watch` and read by `status`, `next`, `seen` and the picker:
 
 | Option | Value |
 | --- | --- |
-| `@agent` | agent name (`claude`) |
+| `@agent` | agent name (`claude`, or `watch` for `finter watch`) |
 | `@agent_state` | `working`, `asking` or `done` |
 | `@agent_since` | unix epoch seconds of the last state change |
 | `@agent_msg` | one-line message (about 60 chars) |
@@ -64,7 +65,7 @@ Printed by `finter list --json` on each machine (inner server only):
 
 ## Selection UI
 
-- Rows: icon, name, wait time, message.
+- Rows: icon, name, wait time, message. A project with several tracked panes shows one icon per pane in window order; the rest of the row uses the most urgent one.
 - Order: asking, done, working (oldest wait first within a state), then existing sessions, then folders. The current session is moved to the front.
 - Wrapper sessions (`mini/X`) appear once, as the remote row; inner sessions never get rows of their own. A local folder row is marked `*` when its project has an inner session.
 

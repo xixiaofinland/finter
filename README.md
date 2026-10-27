@@ -70,6 +70,14 @@ Notes:
 
 `finter hook claude` records what Claude Code is doing in the tmux pane it runs in (pane options `@agent`, `@agent_state`, `@agent_since`, `@agent_msg`). `finter status` renders the waiting agents for the tmux status bar, `finter next` jumps to the oldest one, and `finter seen` clears `done` badges. See [Tmux Integration](docs/tmux-integration.md) for the hook and tmux wiring.
 
+Long-running scripts can be tracked the same way, next to Claude in another window of the project. `finter watch -- <command> [args...]` runs the command (exit code passed through) and shows its pane as working until it ends, then done, whatever the exit code:
+
+```fish
+env CLAUDE_CODE_OAUTH_TOKEN=(cat ~/.config/claude-accounts/dev) finter watch -- issue-loop
+```
+
+The picker row shows one icon per tracked pane in window order, e.g. `⚙ ✅ finter` for Claude working in window 1 and a finished script in window 2.
+
 ## Docs
 
 - [Usage](docs/usage.md)

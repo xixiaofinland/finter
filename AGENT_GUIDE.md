@@ -17,7 +17,7 @@
    - **Existing default-server session** (old plain session or wrapper): switches/attaches to it
    - **Local project:** creates wrapper session `<X>` on the default server with one pane in the project directory that runs `finter attach X` (inner session `X` on this machine's `-L finter` server, created with a Claude window and a terminal window)
    - **Remote project:** creates local session `<host>/<X>` with one pane that runs `ssh -t <alias> finter attach X`
-4. `finter hook claude` records agent state in pane options; `status`, `next`, `seen` read them
+4. `finter hook claude` (and `finter watch` for scripts) records agent state in pane options; `status`, `next`, `seen` read them
 
 ## Repository Structure
 
@@ -25,12 +25,13 @@
 finter/
 ├── .github/workflows/publish.yml  # Auto-publish to crates.io on version change
 ├── src/
-│   ├── main.rs      # clap CLI: -d and subcommands (hook, status, next, seen, preview, kill, list, attach)
+│   ├── main.rs      # clap CLI: -d and subcommands (hook, watch, status, next, seen, preview, kill, list, attach)
 │   ├── lib.rs       # glue: picker flow, list, attach
 │   ├── config.rs    # ~/.finter.toml: roots, [[hosts]], folder scanning
 │   ├── tmux.rs      # tmux runner (default server and `-L finter`), pane listing, option argv builders
 │   ├── state.rs     # AgentState, AgentEntry, ordering, next selection, age format
 │   ├── hook.rs      # `finter hook claude`, transcript tail
+│   ├── watch.rs     # `finter watch -- <command>`: track a script in its pane
 │   ├── remote.rs    # list --json schema, ssh + cache, attach, wrapper session, inner.conf use
 │   ├── status.rs    # status, next, seen, preview, kill
 │   ├── picker.rs    # picker rows + skim
@@ -53,7 +54,7 @@ finter/
 
 ### Testing seams
 
-Logic is pure and unit-tested: `remote::split_remote_tag`, `remote::attach_command` (remote and local forms), `hook::decide`, `hook::last_assistant_text`, `status::render_status`, `state::pick_next`, `picker::build_rows`, `remote::merge_fetch`, `remote::load_host_with` (takes the fetch function, so ssh is mocked). tmux and ssh execution is not unit-tested; smoke test on a scratch server (`tmux -L finter-test`, `FINTER_INNER_SOCKET`, a fake `HOME`/`XDG_RUNTIME_DIR` with a seeded cache file).
+Logic is pure and unit-tested: `remote::split_remote_tag`, `remote::attach_command` (remote and local forms), `hook::decide`, `hook::last_assistant_text`, `status::render_status`, `state::pick_next`, `picker::build_rows`, `watch::exit_code`, `remote::merge_fetch`, `remote::load_host_with` (takes the fetch function, so ssh is mocked). `tests/watch.rs` runs `finter watch` against a throwaway `tmux -S` server. Other tmux and ssh execution is not unit-tested; smoke test on a scratch server (`tmux -L finter-test`, `FINTER_INNER_SOCKET`, a fake `HOME`/`XDG_RUNTIME_DIR` with a seeded cache file).
 
 ## Configuration
 
