@@ -1,8 +1,6 @@
 use crate::config::{get_folders, load_project_paths, Config, HostConfig};
 use crate::remote::{self, HostState};
-use crate::state::{
-    best_per_project, pick_next, project_of, term_slot, wrapper_session, AgentEntry, AgentState,
-};
+use crate::state::{best_per_project, pick_next, wrapper_session, AgentEntry, AgentState};
 use crate::tmux::{self, Socket};
 use std::{
     io::Write,
@@ -118,15 +116,25 @@ pub fn run_status(current_arg: Option<&str>) {
 
 // ── next
 
-/// Window to select inside the wrapper (`alias` empty for this machine) for an entry.
-fn wrapper_window(wrapper: &str, alias: &str, entry: &AgentEntry) -> String {
-    let tag = remote::remote_tag(alias, &entry.session);
-    let found = tmux::list_pane_rows(Socket::Default)
-        .into_iter()
-        .find(|p| p.session == wrapper && p.remote == tag)
-        .map(|p| p.window);
-    // base-index is 1 on every host, so claude is window 1 and the terminal window 2.
-    found.unwrap_or_else(|| if entry.is_term() { "2" } else { "1" }.to_string())
+/// Bring an inner agent pane to the front of its session (`alias` empty for this
+/// machine). Every client of the session follows, whichever machine it is on.
+fn focus_inner(alias: &str, entry: &AgentEntry) {
+    let window = format!("={}:{}", entry.session, entry.window);
+    let args = [
+        "select-window",
+        "-t",
+        &window,
+        ";",
+        "select-pane",
+        "-t",
+        &entry.pane_id,
+    ];
+    if alias.is_empty() {
+        tmux::run_on(Socket::Inner, &args);
+    } else {
+        // `next` is a keypress: switch right away and let the remote select catch up.
+        remote::ssh_spawn(alias, &remote::remote_tmux(&args));
+    }
 }
 
 /// Make sure the wrapper for a remote project exists, then switch to it.
@@ -168,12 +176,7 @@ pub fn run_next() {
                 .unwrap_or_default();
             let path = remote::find_project_path(&folders, entry.project());
             if go_to_local(entry.project(), path) {
-                let wrapper = entry.local_session();
-                let window = wrapper_window(&wrapper, "", entry);
-                tmux::run_on(
-                    Socket::Default,
-                    &["select-window", "-t", &format!("{wrapper}:{window}")],
-                );
+                focus_inner("", entry);
             }
         }
         None => {
@@ -190,12 +193,7 @@ pub fn run_next() {
                 return;
             };
             if go_to_remote(host, entry.project()) {
-                let wrapper = entry.local_session();
-                let window = wrapper_window(&wrapper, &host.ssh, entry);
-                tmux::run_on(
-                    Socket::Default,
-                    &["select-window", "-t", &format!("{wrapper}:{window}")],
-                );
+                focus_inner(&host.ssh, entry);
             }
         }
     }
@@ -287,8 +285,7 @@ fn seen_remote(host: &HostConfig, project: &str, action: SeenAction) {
     let Some(data) = cache.data.as_mut() else {
         return;
     };
-    let mine =
-        |p: &remote::ListPane| project_of(&p.session) == project && affected(p.state, action);
+    let mine = |p: &remote::ListPane| p.session == project && affected(p.state, action);
     let panes: Vec<String> = data
         .panes
         .iter()
@@ -301,11 +298,7 @@ fn seen_remote(host: &HostConfig, project: &str, action: SeenAction) {
     // Reflect the change locally right away; the remote write is fire-and-forget.
     data.panes
         .retain(|p| !(mine(p) && p.state == AgentState::Done));
-    for p in data
-        .panes
-        .iter_mut()
-        .filter(|p| project_of(&p.session) == project)
-    {
+    for p in data.panes.iter_mut().filter(|p| p.session == project) {
         if p.state == AgentState::Asking && action == SeenAction::Leave {
             p.state = AgentState::Done;
         }
@@ -318,16 +311,13 @@ fn seen_remote(host: &HostConfig, project: &str, action: SeenAction) {
 }
 
 /// Clear agents behind a local session: the session's own panes on the default server
-/// (legacy plain sessions) and the project's inner sessions (`X`, `X~term`...) behind a
-/// local wrapper. Pane ids are per server, so each set runs on its own socket.
+/// (legacy plain sessions) and the project's inner session behind a local wrapper. Pane
+/// ids are per server, so each set runs on its own socket.
 fn seen_local(session: &str, action: SeenAction) {
     for socket in [Socket::Default, Socket::Inner] {
         let panes: Vec<String> = tmux::list_agent_entries(socket, None)
             .into_iter()
-            .filter(|e| match socket {
-                Socket::Default => e.session == session,
-                Socket::Inner => project_of(&e.session) == session,
-            })
+            .filter(|e| e.session == session)
             .filter(|e| affected(e.state, action))
             .map(|e| e.pane_id)
             .collect();
@@ -428,114 +418,6 @@ pub fn run_preview(target: &str) {
     match text {
         Some(t) => println!("{}", tail_lines(&t, rows)),
         None => println!("(no live session)"),
-    }
-}
-
-// ── copy-mode
-
-pub fn run_copy_mode() {
-    let mut args = vec!["display-message", "-p"];
-    let pane = std::env::var("TMUX_PANE").ok();
-    if let Some(p) = pane.as_deref() {
-        args.extend(["-t", p]);
-    }
-    args.push("#{@finter_remote}");
-    let tag = tmux::stdout_of(Socket::Default, &args).unwrap_or_default();
-    match remote::split_remote_tag(&tag) {
-        Some((alias, session)) => {
-            let target = format!("={session}:");
-            if let Err(e) = remote::inner_run(alias, &["copy-mode", "-t", &target]) {
-                eprintln!("finter copy-mode: {e}");
-            }
-        }
-        None => {
-            tmux::run_on(Socket::Default, &["copy-mode"]);
-        }
-    }
-}
-
-// ── new window, split window
-
-/// Where a new project terminal opens.
-enum Open {
-    Window,
-    Split { vertical: bool },
-}
-
-/// Open a window next to the current pane. In a wrapper pane that is another
-/// terminal on the remote host (`X~termN`); a plain local window would land in
-/// the ssh process's local cwd, which is never what a remote project wants.
-pub fn run_new_window() {
-    open_term(Open::Window);
-}
-
-/// Split the current pane. In a wrapper pane the new pane is another terminal of
-/// the project (`X~termN`), like `run_new_window`; splitting the wrapper pane
-/// plainly would give a shell outside the project's sessions.
-pub fn run_split_window(vertical: bool) {
-    open_term(Open::Split { vertical });
-}
-
-fn open_term(open: Open) {
-    let mut args = vec!["display-message", "-p"];
-    let pane = std::env::var("TMUX_PANE").ok();
-    if let Some(p) = pane.as_deref() {
-        args.extend(["-t", p]);
-    }
-    args.push("#{session_name}\t#{@finter_remote}\t#{pane_current_path}\t#{pane_id}");
-    let Some(info) = tmux::stdout_of(Socket::Default, &args) else {
-        return;
-    };
-    let mut f = info.splitn(4, '\t');
-    let (session, tag, path, pane_id) = (
-        f.next().unwrap_or(""),
-        f.next().unwrap_or(""),
-        f.next().unwrap_or(""),
-        f.next().unwrap_or(""),
-    );
-    let target = format!("={session}:");
-    let Some((alias, inner)) = remote::split_remote_tag(tag) else {
-        match open {
-            Open::Window => {
-                tmux::run_on(Socket::Default, &["new-window", "-t", &target, "-c", path])
-            }
-            Open::Split { vertical } => tmux::run_on(
-                Socket::Default,
-                &[
-                    "split-window",
-                    if vertical { "-v" } else { "-h" },
-                    "-t",
-                    pane_id,
-                    "-c",
-                    path,
-                ],
-            ),
-        };
-        return;
-    };
-    let project = project_of(inner);
-    // Split panes carry the same tags as windows, so they hold their slots too.
-    let used: Vec<u32> = tmux::list_pane_rows(Socket::Default)
-        .into_iter()
-        .filter(|p| p.session == session)
-        .filter_map(|p| {
-            let (a, s) = remote::split_remote_tag(&p.remote)?;
-            let (proj, slot) = term_slot(s)?;
-            (a == alias && proj == project).then_some(slot)
-        })
-        .collect();
-    let slot = remote::free_term_slot(&used);
-    // A remote wrapper pane's cwd is the ssh client's, meaningless for the project.
-    let cwd = (alias.is_empty() && !path.is_empty()).then_some(path);
-    match open {
-        Open::Window => {
-            if let Some(pane) = remote::add_term_window(session, alias, project, slot, cwd) {
-                tmux::run_on(Socket::Default, &["select-window", "-t", &pane]);
-            }
-        }
-        Open::Split { vertical } => {
-            remote::add_term_split(pane_id, vertical, alias, project, slot, cwd);
-        }
     }
 }
 
@@ -652,7 +534,7 @@ mod tests {
     fn remote_entries_use_distinct_colours() {
         let v = vec![
             e(Some("mini"), "a", AgentState::Asking, 1),
-            e(Some("mini"), "b~term", AgentState::Done, 2),
+            e(Some("mini"), "b", AgentState::Done, 2),
         ];
         let out = render_status(&v, &[], None);
         assert!(out.contains("bg=colour125"));
@@ -675,7 +557,7 @@ mod tests {
         let v = vec![
             e(None, "mine", AgentState::Asking, 1),
             e(Some("mini"), "far", AgentState::Asking, 2),
-            e(Some("mini"), "far~term", AgentState::Done, 3),
+            e(Some("mini"), "far", AgentState::Done, 3),
             e(None, "other", AgentState::Done, 4),
         ];
         let out = render_status(&v, &[], Some("mine"));
@@ -698,10 +580,10 @@ mod tests {
     }
 
     #[test]
-    fn x_and_term_collapse_to_one_badge() {
+    fn panes_of_a_project_collapse_to_one_badge() {
         let v = vec![
             e(None, "x", AgentState::Done, 1),
-            e(None, "x~term", AgentState::Done, 2),
+            e(None, "x", AgentState::Done, 2),
         ];
         assert_eq!(render_status(&v, &[], None).matches('✅').count(), 1);
     }
@@ -731,8 +613,8 @@ mod tests {
     fn local_inner_entries_badge_under_their_wrapper() {
         let v = vec![
             crate::state::test_inner_entry("mine", AgentState::Asking, 1),
-            crate::state::test_inner_entry("mine~term", AgentState::Done, 2),
-            crate::state::test_inner_entry("other~term", AgentState::Done, 3),
+            crate::state::test_inner_entry("mine", AgentState::Done, 2),
+            crate::state::test_inner_entry("other", AgentState::Done, 3),
         ];
         let out = render_status(&v, &[], Some("mine"));
         assert!(!out.contains("mine") && out.contains("other"));
@@ -791,8 +673,8 @@ mod tests {
     fn preview_targets_round_trip() {
         assert_eq!(parse_target(&local_target("a/b")), Some((None, "a/b")));
         assert_eq!(
-            parse_target(&remote_target("mac-mini", "x~term")),
-            Some((Some("mac-mini"), "x~term"))
+            parse_target(&remote_target("mac-mini", "x")),
+            Some((Some("mac-mini"), "x"))
         );
         assert_eq!(parse_target("junk"), None);
     }
@@ -809,9 +691,9 @@ mod tests {
     fn kill_inner_cmd_kills_each_session_exactly_and_tolerates_missing_ones() {
         let tmux = format!("tmux -L {}", tmux::shell_quote(&tmux::inner_socket_name()));
         assert_eq!(
-            kill_inner_cmd(&["recap", "recap~term"]),
+            kill_inner_cmd(&["recap", "finter"]),
             format!(
-                "{tmux} 'kill-session' '-t' '=recap'; {tmux} 'kill-session' '-t' '=recap~term'; true"
+                "{tmux} 'kill-session' '-t' '=recap'; {tmux} 'kill-session' '-t' '=finter'; true"
             )
         );
     }

@@ -13,10 +13,7 @@ use tmux::{get_current_session, get_sessions, run_tmux_with_args, Socket};
 
 pub use config::save_paths;
 pub use hook::run_hook;
-pub use status::{
-    run_copy_mode, run_kill, run_new_window, run_next, run_preview, run_seen, run_split_window,
-    run_status,
-};
+pub use status::{run_kill, run_next, run_preview, run_seen, run_status};
 pub type MyResult<T> = Result<T, Box<dyn Error>>;
 
 pub fn run_finter() -> Result<(), Box<dyn Error>> {
@@ -94,10 +91,10 @@ pub fn run_list(json: bool) -> Result<(), Box<dyn Error>> {
 }
 
 /// `finter attach`: runs on the machine owning the project and execs into its inner tmux server.
-pub fn run_attach(name: &str, term: Option<u32>) -> Result<(), Box<dyn Error>> {
+pub fn run_attach(name: &str) -> Result<(), Box<dyn Error>> {
     let config = load_config()?;
     let folders = get_folders(load_project_paths(&config)?)?;
     let path = remote::find_project_path(&folders, name)
         .ok_or_else(|| format!("Err: project `{name}` not found in configured roots"))?;
-    remote::exec_attach(name, term, path)
+    remote::exec_attach(name, path)
 }

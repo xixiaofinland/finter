@@ -340,12 +340,8 @@ mod tests {
 
     #[test]
     fn folder_exists_when_its_project_has_an_inner_session() {
-        let agents = vec![crate::state::test_inner_entry(
-            "repo1~term",
-            AgentState::Done,
-            5,
-        )];
-        let inner: Vec<String> = vec!["repo1".into(), "repo1~term".into()];
+        let agents = vec![crate::state::test_inner_entry("repo1", AgentState::Done, 5)];
+        let inner: Vec<String> = vec!["repo1".into()];
         let rows = build_rows(
             &folders(&["repo1", "repo2"]),
             &[],
@@ -411,7 +407,7 @@ mod tests {
     fn remote_projects_become_host_prefixed_rows() {
         let hs = host_state(
             &[("recap", true), ("finter", false)],
-            vec![pane("recap~term", AgentState::Done, 40)],
+            vec![pane("recap", AgentState::Done, 40)],
             false,
         );
         let sessions: Vec<String> = vec!["mini/recap".into(), "local".into()];

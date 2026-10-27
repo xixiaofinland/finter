@@ -1,9 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// Suffix of the inner terminal sessions that accompany project session `X`:
-/// `X~term` for window 2, `X~term2`, `X~term3`... for windows opened later.
-pub(crate) const TERM_SUFFIX: &str = "~term";
-
 /// What an agent in a pane is doing. Stored in the `@agent_state` pane option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -51,7 +47,8 @@ impl AgentState {
 pub(crate) struct AgentEntry {
     /// Host name from `[[hosts]]`, `None` for this machine.
     pub(crate) host: Option<String>,
-    /// tmux session the pane lives in (the inner session for remote entries).
+    /// tmux session the pane lives in: the project's inner session `X`, or a legacy
+    /// plain session on the default server.
     pub(crate) session: String,
     pub(crate) window: String,
     pub(crate) pane_id: String,
@@ -65,13 +62,9 @@ pub(crate) struct AgentEntry {
 }
 
 impl AgentEntry {
-    /// Project name: the session without the `~term[N]` suffix.
+    /// Project name: a project is one session, so this is the session name.
     pub(crate) fn project(&self) -> &str {
-        project_of(&self.session)
-    }
-
-    pub(crate) fn is_term(&self) -> bool {
-        project_of(&self.session).len() < self.session.len()
+        &self.session
     }
 
     /// Session on this machine's default server that shows the entry: the wrapper
@@ -82,26 +75,6 @@ impl AgentEntry {
             None if self.inner => self.project().to_string(),
             None => self.session.clone(),
         }
-    }
-}
-
-pub(crate) fn project_of(session: &str) -> &str {
-    term_slot(session).map_or(session, |(project, _)| project)
-}
-
-/// Split `X~term` into `("X", 1)` and `X~termN` into `("X", N)`; `None` for project sessions.
-pub(crate) fn term_slot(session: &str) -> Option<(&str, u32)> {
-    let (project, n) = session.rsplit_once(TERM_SUFFIX)?;
-    if project.is_empty() {
-        return None;
-    }
-    match n {
-        "" => Some((project, 1)),
-        // Only the spelling `inner_session_name` produces: `~term2`, never `~term1` or `~term02`.
-        _ if n.bytes().all(|b| b.is_ascii_digit()) && !n.starts_with('0') => {
-            n.parse().ok().filter(|&n| n >= 2).map(|n| (project, n))
-        }
-        _ => None,
     }
 }
 
@@ -137,7 +110,7 @@ pub(crate) fn pick_next(entries: &[AgentEntry]) -> Option<&AgentEntry> {
 }
 
 /// Collapse each project to its most urgent entry (asking > done > working,
-/// then oldest). `X` and `X~term` therefore yield one badge.
+/// then oldest). Several agent panes of `X` therefore yield one badge.
 pub(crate) fn best_per_project(entries: &[AgentEntry]) -> Vec<AgentEntry> {
     let mut sorted = entries.to_vec();
     sort_entries(&mut sorted);
@@ -242,40 +215,21 @@ mod tests {
     }
 
     #[test]
-    fn term_sessions_map_to_project_and_wrapper() {
-        let e = test_entry(Some("mini"), "recap~term", AgentState::Asking, 1);
-        assert!(e.is_term());
+    fn entries_map_to_their_wrapper() {
+        let e = test_entry(Some("mini"), "recap", AgentState::Asking, 1);
         assert_eq!(e.project(), "recap");
         assert_eq!(e.local_session(), "mini/recap");
         let local = test_entry(None, "recap", AgentState::Asking, 1);
         assert_eq!(local.local_session(), "recap");
-        let inner = test_inner_entry("recap~term", AgentState::Asking, 1);
+        let inner = test_inner_entry("recap", AgentState::Done, 1);
         assert_eq!(inner.local_session(), "recap");
-        assert_eq!(
-            test_inner_entry("recap", AgentState::Done, 1).local_session(),
-            "recap"
-        );
-        let third = test_entry(Some("mini"), "recap~term3", AgentState::Done, 1);
-        assert!(third.is_term());
-        assert_eq!(third.local_session(), "mini/recap");
     }
 
     #[test]
-    fn term_slot_accepts_only_canonical_suffixes() {
-        assert_eq!(term_slot("x~term"), Some(("x", 1)));
-        assert_eq!(term_slot("x~term2"), Some(("x", 2)));
-        assert_eq!(term_slot("a~term~term12"), Some(("a~term", 12)));
-        for s in ["x", "x~term1", "x~term02", "x~termy", "~term", "x~term-2"] {
-            assert_eq!(term_slot(s), None, "{s}");
-        }
-        assert_eq!(project_of("x~termy"), "x~termy");
-    }
-
-    #[test]
-    fn best_per_project_collapses_term_sessions() {
+    fn best_per_project_collapses_panes_of_a_project() {
         let v = vec![
             test_entry(Some("mini"), "x", AgentState::Working, 5),
-            test_entry(Some("mini"), "x~term", AgentState::Asking, 9),
+            test_entry(Some("mini"), "x", AgentState::Asking, 9),
             test_entry(None, "x", AgentState::Done, 1),
         ];
         let best = best_per_project(&v);

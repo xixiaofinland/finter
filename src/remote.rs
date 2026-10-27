@@ -1,5 +1,5 @@
 use crate::config::{Config, HostConfig};
-use crate::state::{wrapper_session, AgentEntry, AgentState, TERM_SUFFIX};
+use crate::state::{wrapper_session, AgentEntry, AgentState};
 use crate::tmux::{self, shell_quote, Socket};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -36,7 +36,7 @@ pub(crate) struct ListProject {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ListPane {
-    /// Inner session name (`X` or `X~term`).
+    /// Inner session name: the project.
     pub(crate) session: String,
     pub(crate) window: String,
     pub(crate) pane: String,
@@ -384,16 +384,6 @@ pub(crate) fn load_hosts(config: &Config, now: u64, refresh: bool) -> Vec<HostSt
 
 // ── attach (runs on the remote machine)
 
-/// Name of the inner session for project `name`: the project session for `None`,
-/// `X~term` for terminal slot 1 and `X~termN` for slot N (see `state::term_slot`).
-pub(crate) fn inner_session_name(name: &str, term: Option<u32>) -> String {
-    match term {
-        None => name.to_string(),
-        Some(1) => format!("{name}{TERM_SUFFIX}"),
-        Some(n) => format!("{name}{TERM_SUFFIX}{n}"),
-    }
-}
-
 pub(crate) fn find_project_path<'a>(
     folders: &'a [(String, String)],
     name: &str,
@@ -404,8 +394,8 @@ pub(crate) fn find_project_path<'a>(
         .map(|(_, p)| p.as_str())
 }
 
-/// Write `inner.conf` unless it already matches; windows 1 and 2 attach at the same
-/// time, and a plain truncate+write would let one tmux read a half-written file.
+/// Write `inner.conf` unless it already matches; several machines can attach at the
+/// same time, and a plain truncate+write would let one tmux read a half-written file.
 fn write_inner_conf() -> Result<PathBuf, Box<dyn Error>> {
     let dir = ensure_runtime_dir()?;
     let path = dir.join("inner.conf");
@@ -418,18 +408,37 @@ fn write_inner_conf() -> Result<PathBuf, Box<dyn Error>> {
     Ok(path)
 }
 
-/// Replace this process with `tmux -L finter new-session -A` for project `name`.
-pub(crate) fn exec_attach(name: &str, term: Option<u32>, path: &str) -> Result<(), Box<dyn Error>> {
+/// Replace this process with a client of project `name`'s inner session. A new
+/// session gets window 1 for the agent and window 2 for a terminal; an existing one
+/// is attached as it is, whichever machine opened it.
+pub(crate) fn exec_attach(name: &str, path: &str) -> Result<(), Box<dyn Error>> {
     let conf = write_inner_conf()?;
-    let session = inner_session_name(name, term);
-    let err = Command::new("tmux")
-        .arg("-L")
-        .arg(tmux::inner_socket_name())
-        .arg("-f")
-        .arg(conf)
-        .args(["new-session", "-A", "-s", &session, "-c", path])
-        // A nested $TMUX would make tmux refuse to attach.
-        .env_remove("TMUX")
+    let inner = || {
+        let mut cmd = Command::new("tmux");
+        cmd.arg("-L")
+            .arg(tmux::inner_socket_name())
+            .arg("-f")
+            .arg(&conf)
+            // A nested $TMUX would make tmux refuse to attach.
+            .env_remove("TMUX")
+            .stderr(Stdio::null());
+        cmd
+    };
+    let target = format!("={name}");
+    let ok = |cmd: &mut Command| cmd.status().is_ok_and(|s| s.success());
+    // When another machine creates the session first, new-session fails and the
+    // attach below joins that one.
+    if !ok(inner().args(["has-session", "-t", &target]))
+        && ok(inner().args(["new-session", "-d", "-s", name, "-c", path]))
+    {
+        let window = format!("{target}:");
+        inner()
+            .args(["new-window", "-d", "-t", &window, "-c", path])
+            .status()?;
+    }
+    let err = inner()
+        .stderr(Stdio::inherit())
+        .args(["attach-session", "-t", &target])
         .exec();
     Err(format!("failed to exec tmux: {err}").into())
 }
@@ -464,23 +473,18 @@ pub(crate) fn inner_run(alias: &str, args: &[&str]) -> Result<String, String> {
     ssh_run(alias, &remote_tmux(args))
 }
 
-/// Window command that attaches to inner session `project` (`--term[=N]` for terminals).
+/// Wrapper command that attaches to inner session `project`.
 /// Remote (non-empty alias): retry ssh only when the connection drops (exit 255); any
 /// other exit (clean detach, killed inner session, remote error) ends the loop.
 /// Local (empty alias): `exec finter attach`, no ssh.
 /// Wrapped in `sh -c` because the tmux default-shell may be fish.
-pub(crate) fn attach_command(alias: &str, project: &str, term: Option<u32>) -> String {
-    let suffix = match term {
-        None => String::new(),
-        Some(1) => " --term".to_string(),
-        Some(n) => format!(" --term={n}"),
-    };
+pub(crate) fn attach_command(alias: &str, project: &str) -> String {
     if alias.is_empty() {
-        let script = format!("exec finter attach {}{suffix}", shell_quote(project));
+        let script = format!("exec finter attach {}", shell_quote(project));
         return format!("sh -c {}", shell_quote(&script));
     }
     // ssh joins its argv with spaces for the remote shell, so send one quoted string.
-    let remote = format!("finter attach {}{suffix}", shell_quote(project));
+    let remote = format!("finter attach {}", shell_quote(project));
     let script = format!(
         "while :; do ssh -t {} {}; rc=$?; [ $rc -eq 255 ] || exit $rc; echo 'finter: reconnecting...'; sleep 2; done",
         shell_quote(alias),
@@ -498,12 +502,13 @@ pub(crate) struct WrapperSpec<'a> {
     pub(crate) project: &'a str,
     /// `@finter_colour` value; `None` leaves it unset (shown white in the status bar).
     pub(crate) colour: Option<String>,
-    /// Start directory of the wrapper windows, so `pane_current_path` is the project.
+    /// Start directory of the wrapper pane, so `pane_current_path` is the project.
     pub(crate) cwd: Option<&'a str>,
 }
 
-/// Create the wrapper with window 1 = claude, window 2 = terminal, both attached to
-/// inner sessions (over ssh, or directly for an empty alias). False when tmux refused.
+/// Create the wrapper: one pane attached to the project's inner session (over ssh, or
+/// directly for an empty alias); the project's windows live in there. False when tmux
+/// refused.
 pub(crate) fn create_wrapper(spec: &WrapperSpec) -> bool {
     let mut args = vec![
         "new-session",
@@ -517,9 +522,9 @@ pub(crate) fn create_wrapper(spec: &WrapperSpec) -> bool {
     if let Some(cwd) = spec.cwd {
         args.extend(["-c", cwd]);
     }
-    let cmd = attach_command(spec.alias, spec.project, None);
+    let cmd = attach_command(spec.alias, spec.project);
     args.push(&cmd);
-    let Some(first) = tmux::stdout_of(Socket::Default, &args) else {
+    let Some(pane) = tmux::stdout_of(Socket::Default, &args) else {
         return false;
     };
     tmux::run_on(
@@ -528,12 +533,11 @@ pub(crate) fn create_wrapper(spec: &WrapperSpec) -> bool {
             "set-option",
             "-p",
             "-t",
-            &first,
+            &pane,
             "@finter_remote",
             &remote_tag(spec.alias, spec.project),
         ],
     );
-    add_term_window(spec.session, spec.alias, spec.project, 1, spec.cwd);
     if let Some(colour) = &spec.colour {
         // Read by the status-left so the session name shows in the host's colour.
         tmux::run_on(
@@ -541,7 +545,6 @@ pub(crate) fn create_wrapper(spec: &WrapperSpec) -> bool {
             &["set-option", "-t", spec.session, "@finter_colour", colour],
         );
     }
-    tmux::run_on(Socket::Default, &["select-window", "-t", &first]);
     true
 }
 
@@ -567,66 +570,6 @@ pub(crate) fn create_local_wrapper(project: &str, path: Option<&str>) -> bool {
     })
 }
 
-/// Open a detached window in wrapper `session` attached to terminal slot `slot` of
-/// `project`, tagged with `@finter_remote`. Returns the new pane id.
-pub(crate) fn add_term_window(
-    session: &str,
-    alias: &str,
-    project: &str,
-    slot: u32,
-    cwd: Option<&str>,
-) -> Option<String> {
-    let target = format!("{session}:");
-    let args = ["new-window", "-d", "-t", &target];
-    open_term_pane(&args, alias, project, slot, cwd)
-}
-
-/// Split wrapper pane `pane` (side by side unless `vertical`) with a pane attached
-/// to terminal slot `slot` of `project`, tagged with `@finter_remote`. Returns the
-/// new pane id.
-pub(crate) fn add_term_split(
-    pane: &str,
-    vertical: bool,
-    alias: &str,
-    project: &str,
-    slot: u32,
-    cwd: Option<&str>,
-) -> Option<String> {
-    let dir = if vertical { "-v" } else { "-h" };
-    let args = ["split-window", dir, "-t", pane];
-    open_term_pane(&args, alias, project, slot, cwd)
-}
-
-/// Run `open` (a tmux command creating one pane) with the attach command for slot
-/// `slot` and tag the new pane, so every finter command treats it as a wrapper pane.
-fn open_term_pane(
-    open: &[&str],
-    alias: &str,
-    project: &str,
-    slot: u32,
-    cwd: Option<&str>,
-) -> Option<String> {
-    let cmd = attach_command(alias, project, Some(slot));
-    let mut args = open.to_vec();
-    args.extend(["-P", "-F", "#{pane_id}"]);
-    if let Some(cwd) = cwd {
-        args.extend(["-c", cwd]);
-    }
-    args.push(&cmd);
-    let pane = tmux::stdout_of(Socket::Default, &args)?;
-    let tag = remote_tag(alias, &inner_session_name(project, Some(slot)));
-    tmux::run_on(
-        Socket::Default,
-        &["set-option", "-p", "-t", &pane, "@finter_remote", &tag],
-    );
-    Some(pane)
-}
-
-/// Lowest terminal slot no wrapper window uses yet; slot 1 is window 2's.
-pub(crate) fn free_term_slot(used: &[u32]) -> u32 {
-    (1..).find(|n| !used.contains(n)).unwrap_or(1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,7 +584,7 @@ mod tests {
             ("recap".to_string(), "/p/recap".to_string()),
             ("finter".to_string(), "/p/finter".to_string()),
         ];
-        let sessions = vec!["recap".to_string(), "recap~term".to_string()];
+        let sessions = vec!["recap".to_string()];
         let mut asking = test_entry(None, "recap", AgentState::Asking, 1_700_000_000);
         asking.msg = "needs you".to_string();
         build_list_output(&folders, &sessions, &[asking])
@@ -795,47 +738,25 @@ mod tests {
     }
 
     #[test]
-    fn free_term_slot_fills_gaps() {
-        assert_eq!(free_term_slot(&[]), 1);
-        assert_eq!(free_term_slot(&[1]), 2);
-        assert_eq!(free_term_slot(&[1, 3]), 2);
-        assert_eq!(free_term_slot(&[2, 1, 3]), 4);
-    }
-
-    #[test]
     fn attach_helpers() {
-        assert_eq!(inner_session_name("x", None), "x");
-        assert_eq!(inner_session_name("x", Some(1)), "x~term");
-        assert_eq!(inner_session_name("x", Some(3)), "x~term3");
-        for slot in [1, 2, 10] {
-            let name = inner_session_name("x", Some(slot));
-            assert_eq!(crate::state::term_slot(&name), Some(("x", slot)));
-        }
         let folders = vec![("a".to_string(), "/p/a".to_string())];
         assert_eq!(find_project_path(&folders, "a"), Some("/p/a"));
         assert_eq!(find_project_path(&folders, "b"), None);
-        let cmd = attach_command("mac-mini", "x", Some(1));
+        let cmd = attach_command("mac-mini", "x");
         assert!(cmd.starts_with("sh -c '"));
         assert!(cmd.contains("ssh -t "));
         assert!(cmd.contains("finter attach "));
-        assert!(cmd.contains("--term"));
         assert!(cmd.contains("[ $rc -eq 255 ] || exit $rc"));
         assert!(cmd.contains("finter: reconnecting..."));
-        assert!(!attach_command("mac-mini", "x", None).contains("--term"));
-        assert_eq!(remote_tag("mac-mini", "x~term"), "mac-mini:x~term");
-        assert_eq!(
-            split_remote_tag("mac-mini:x~term"),
-            Some(("mac-mini", "x~term"))
-        );
+        assert_eq!(remote_tag("mac-mini", "x"), "mac-mini:x");
+        assert_eq!(split_remote_tag("mac-mini:x"), Some(("mac-mini", "x")));
         assert_eq!(split_remote_tag("nocolon"), None);
     }
 
     #[test]
     fn empty_alias_tags_mean_this_machine() {
         assert_eq!(remote_tag("", "x"), ":x");
-        assert_eq!(remote_tag("", "x~term2"), ":x~term2");
         assert_eq!(split_remote_tag(":x"), Some(("", "x")));
-        assert_eq!(split_remote_tag(":x~term"), Some(("", "x~term")));
         // An empty session is never a tag, whatever the alias.
         assert_eq!(split_remote_tag(":"), None);
         assert_eq!(split_remote_tag("mini:"), None);
@@ -844,15 +765,9 @@ mod tests {
 
     #[test]
     fn local_attach_command_execs_finter_without_ssh() {
-        let plain = attach_command("", "x", None);
-        let term = attach_command("", "x", Some(1));
-        assert!(plain.starts_with("sh -c '") && plain.contains("exec finter attach "));
-        assert!(!plain.contains("--term"));
-        assert!(term.contains("exec finter attach ") && term.contains(" --term"));
-        assert!(attach_command("", "x", Some(3)).contains("--term=3"));
-        for cmd in [&plain, &term] {
-            assert!(!cmd.contains("ssh") && !cmd.contains("255"));
-        }
+        let cmd = attach_command("", "x");
+        assert!(cmd.starts_with("sh -c '") && cmd.contains("exec finter attach "));
+        assert!(!cmd.contains("ssh") && !cmd.contains("255"));
     }
 
     #[test]
@@ -867,12 +782,8 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
-        for (name, term, expect) in [
-            ("my proj", None, "<attach><my proj>"),
-            ("it's", Some(1), "<attach><it's><--term>"),
-            ("x", Some(2), "<attach><x><--term=2>"),
-        ] {
-            let cmd = attach_command("", name, term);
+        for (name, expect) in [("my proj", "<attach><my proj>"), ("it's", "<attach><it's>")] {
+            let cmd = attach_command("", name);
             let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap());
             let out = Command::new("sh")
                 .args(["-c", &cmd])
@@ -893,12 +804,11 @@ mod tests {
         let ssh = dir.join("ssh");
         fs::write(&ssh, "#!/bin/sh\nsh -c \"printf '<%s>' $3\"\n").unwrap();
         fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
-        for (name, term, expect) in [
-            ("my proj", None, "<finter><attach><my proj>"),
-            ("it's", Some(1), "<finter><attach><it's><--term>"),
-            ("x", Some(2), "<finter><attach><x><--term=2>"),
+        for (name, expect) in [
+            ("my proj", "<finter><attach><my proj>"),
+            ("it's", "<finter><attach><it's>"),
         ] {
-            let cmd = attach_command("alias", name, term);
+            let cmd = attach_command("alias", name);
             let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap());
             let out = Command::new("sh")
                 .args(["-c", &cmd])
@@ -922,8 +832,10 @@ mod tests {
     #[test]
     fn inner_conf_has_required_settings() {
         for needle in [
-            "status off",
+            "status on",
             "prefix None",
+            "base-index 1",
+            "bind -n F12 switch-client -T finter",
             "mouse on",
             "set-clipboard on",
             "allow-passthrough on",
@@ -942,7 +854,7 @@ mod tests {
     #[test]
     fn forget_sessions_clears_exists_and_drops_panes() {
         let mut list = sample_list();
-        forget_sessions(&mut list, &["recap", "recap~term"]);
+        forget_sessions(&mut list, &["recap"]);
         assert!(list.projects.iter().all(|p| !p.session_exists));
         assert!(list.panes.is_empty());
     }

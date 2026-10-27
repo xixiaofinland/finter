@@ -37,31 +37,15 @@ enum Command {
     },
     /// Show recent output of a session (used by the picker preview)
     Preview { target: String },
-    /// Enter copy mode in the remote tmux behind the current pane
-    CopyMode,
     /// Kill the current session; for a remote project also its sessions on the host
     Kill,
-    /// Open a window; in a remote project it is a new terminal on the host
-    NewWindow,
-    /// Split the current pane side by side; in a wrapper the new pane is another terminal of the project
-    SplitWindow {
-        /// Stack the new pane below instead
-        #[arg(long)]
-        vertical: bool,
-    },
     /// Print this machine's projects and agent panes (inner tmux server)
     List {
         #[arg(long)]
         json: bool,
     },
-    /// Attach to (or create) the inner tmux session for a project; run by wrapper windows, locally or over ssh
-    Attach {
-        name: String,
-        /// Use the terminal session `<name>~term`; `--term=N` (N >= 2) uses `<name>~termN`
-        #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "1",
-              value_parser = clap::value_parser!(u32).range(1..))]
-        term: Option<u32>,
-    },
+    /// Attach to (or create) the inner tmux session for a project; run by wrappers, locally or over ssh
+    Attach { name: String },
 }
 
 // --------------------------------------------------
@@ -97,24 +81,12 @@ fn run(args: Args) -> finter::MyResult<()> {
             finter::run_preview(&target);
             Ok(())
         }
-        (Some(Command::CopyMode), _) => {
-            finter::run_copy_mode();
-            Ok(())
-        }
         (Some(Command::Kill), _) => {
             finter::run_kill();
             Ok(())
         }
-        (Some(Command::NewWindow), _) => {
-            finter::run_new_window();
-            Ok(())
-        }
-        (Some(Command::SplitWindow { vertical }), _) => {
-            finter::run_split_window(vertical);
-            Ok(())
-        }
         (Some(Command::List { json }), _) => finter::run_list(json),
-        (Some(Command::Attach { name, term }), _) => finter::run_attach(&name, term),
+        (Some(Command::Attach { name }), _) => finter::run_attach(&name),
         (None, None) => finter::run_finter(),
         (None, Some(directories)) => finter::save_paths(&directories),
     }

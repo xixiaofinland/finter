@@ -40,14 +40,16 @@ bind a run-shell -b "finter next"
 set-hook -g client-session-changed 'run-shell -b "finter seen --leave"'
 set-hook -g pane-focus-in 'run-shell -b "finter seen"'
 
-# copy mode: wrapper panes (remote or local project) enter copy mode on the inner tmux
-bind [ if -F '#{@finter_remote}' 'run-shell -b "finter copy-mode"' 'copy-mode'
-
-# new window: in a wrapper another terminal of the project, else a local one
-bind c if -F '#{@finter_remote}' 'run-shell -b "finter new-window"' 'new-window -c "#{pane_current_path}"'
-
-# split: in a wrapper another terminal of the project beside the pane, else a local one
-bind l run-shell -b "finter split-window"
+# project keys: in a wrapper pane they act on the project's inner session (sent as
+# F12 + key, see Inner tmux below), elsewhere on the outer tmux as usual
+bind n if -F '#{@finter_remote}' 'send-keys F12 n' 'next-window'
+bind p if -F '#{@finter_remote}' 'send-keys F12 p' 'previous-window'
+bind c if -F '#{@finter_remote}' 'send-keys F12 =' 'new-window -c "#{pane_current_path}"'
+bind l if -F '#{@finter_remote}' 'send-keys F12 l' 'split-window -h -c "#{pane_current_path}"'
+bind q if -F '#{@finter_remote}' 'send-keys F12 q' 'kill-pane'
+bind [ if -F '#{@finter_remote}' 'send-keys F12 [' 'copy-mode'
+bind 1 if -F '#{@finter_remote}' 'send-keys F12 1' 'select-window -t :=1'
+# ... and so on for 2-9
 
 # kill the current session; for a wrapper also its inner sessions
 bind x run-shell "finter kill"
@@ -70,11 +72,13 @@ Register the hook in Claude Code (`~/.claude/settings.json`) for `UserPromptSubm
 }
 ```
 
-Use the same command for the other events. Project sessions run the hook on the machine that owns them, inside the inner server, so `finter` must be on the `PATH` of that `-L finter` server (it inherits the environment of the first `finter attach`, local or over ssh). Every wrapper pane, local ones included, has a non-empty `@finter_remote` (`:X` for this machine), which the `[`, `c` bindings above test.
+Use the same command for the other events. Project sessions run the hook on the machine that owns them, inside the inner server, so `finter` must be on the `PATH` of that `-L finter` server (it inherits the environment of the first `finter attach`, local or over ssh). Every wrapper pane, local ones included, has a non-empty `@finter_remote` (`:X` for this machine), which the project-key bindings above test.
 
 ## Inner tmux
 
-`finter attach` starts project sessions (local wrappers and remote hosts alike) on `tmux -L finter` with an embedded config (`src/inner.conf`) written to `$XDG_RUNTIME_DIR/finter/inner.conf`: status bar off, no prefix key, mouse on, clipboard passthrough, focus events, `extended-keys` with `csi-u`, vi copy mode (`v`, `C-v`, `V`, `y`). The outer tmux owns all keys; the mouse wheel and PgUp/PgDn reach the inner pane. A plain `split-window` in a wrapper splits the outer wrapper pane, so the new shell is outside the project session; `finter split-window` opens another project terminal there instead.
+`finter attach` starts project sessions (local wrappers and remote hosts alike) on `tmux -L finter` with an embedded config (`src/inner.conf`) written to `$XDG_RUNTIME_DIR/finter/inner.conf`: a status bar listing only the project's windows, no prefix key, `base-index 1`, mouse on, clipboard passthrough, focus events, `extended-keys` with `csi-u`, vi copy mode (`v`, `C-v`, `V`, `y`). A project is one inner session; its windows and panes are the project's terminals, and every machine's wrapper shows the same ones (see `docs/adr/0002-one-inner-session-per-project.md`).
+
+The outer tmux owns the prefix. `F12` puts the inner server into its `finter` key table, where `n`, `p`, `=` (new window), `l` (split), `q` (kill pane), `[` (copy mode) and `1`-`9` act on the project; the outer bindings above send `F12` + key, so the keys are the same inside and outside a project and never go over ssh. The mouse wheel and PgUp/PgDn reach the inner pane. A plain `split-window` or `new-window` in a wrapper acts on the outer wrapper, outside the project session.
 
 ## Behavior Inside/Outside Tmux
 

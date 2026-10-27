@@ -97,7 +97,11 @@ Fix:
 
 ## Old project sessions from 0.4.x are still there
 
-Before this change local projects were plain sessions on the default server. They keep working and still show up in the picker, but they are separate from the project's inner session. When you are done with one, kill it (`tmux kill-session -t <name>`); picking the project again then creates the wrapper `<name>` around the inner sessions.
+Before this change local projects were plain sessions on the default server. They keep working and still show up in the picker, but they are separate from the project's inner session. When you are done with one, kill it (`tmux kill-session -t <name>`); picking the project again then creates the wrapper `<name>` around the inner session.
+
+## `X~term` sessions or two-window wrappers after upgrading to 0.7
+
+Up to 0.6 every terminal was its own inner session (`X~term`, `X~term2`, ...) and wrappers had one window per terminal. 0.7 has one inner session per project and one-pane wrappers, and does not migrate the old ones. On every machine, once: kill the wrappers (`finter kill` or `tmux kill-session`), run `tmux -L finter kill-server`, then reopen the projects from the picker. Running agents end with the server; resume them with `claude --resume`.
 
 ## macOS: `open`, Keychain or clipboard behave differently in a project session
 

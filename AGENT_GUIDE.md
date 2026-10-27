@@ -15,8 +15,8 @@
 3. On selection:
    - **Existing session:** switches/attaches to it
    - **Existing default-server session** (old plain session or wrapper): switches/attaches to it
-   - **Local project:** creates wrapper session `<X>` on the default server with 2 windows in the project directory that run `finter attach X [--term]` (inner sessions `X`, `X~term` on this machine's `-L finter` server)
-   - **Remote project:** creates local session `<host>/<X>` with 2 windows that run `ssh -t <alias> finter attach X [--term]`
+   - **Local project:** creates wrapper session `<X>` on the default server with one pane in the project directory that runs `finter attach X` (inner session `X` on this machine's `-L finter` server, created with a Claude window and a terminal window)
+   - **Remote project:** creates local session `<host>/<X>` with one pane that runs `ssh -t <alias> finter attach X`
 4. `finter hook claude` records agent state in pane options; `status`, `next`, `seen` read them
 
 ## Repository Structure
@@ -25,14 +25,14 @@
 finter/
 ├── .github/workflows/publish.yml  # Auto-publish to crates.io on version change
 ├── src/
-│   ├── main.rs      # clap CLI: -d and subcommands (hook, status, next, seen, preview, copy-mode, new-window, split-window, kill, list, attach)
+│   ├── main.rs      # clap CLI: -d and subcommands (hook, status, next, seen, preview, kill, list, attach)
 │   ├── lib.rs       # glue: picker flow, list, attach
 │   ├── config.rs    # ~/.finter.toml: roots, [[hosts]], folder scanning
 │   ├── tmux.rs      # tmux runner (default server and `-L finter`), pane listing, option argv builders
 │   ├── state.rs     # AgentState, AgentEntry, ordering, next selection, age format
 │   ├── hook.rs      # `finter hook claude`, transcript tail
 │   ├── remote.rs    # list --json schema, ssh + cache, attach, wrapper session, inner.conf use
-│   ├── status.rs    # status, next, seen, preview, copy-mode, new-window, split-window, kill
+│   ├── status.rs    # status, next, seen, preview, kill
 │   ├── picker.rs    # picker rows + skim
 │   └── inner.conf   # tmux config for the remote `-L finter` server (include_str!)
 ├── tests/fixtures/transcript.jsonl  # Claude transcript sample for hook tests
@@ -46,8 +46,8 @@ finter/
 ### Contracts
 
 - **Pane options:** `@agent`, `@agent_state` (`working|asking|done`), `@agent_since` (unix secs), `@agent_msg`; `@finter_remote=<alias>:<inner session>` on wrapper panes (an EMPTY alias, `:X`, means this machine's inner server and is run locally, never over ssh; the value must stay non-empty for dotfiles bindings); session option `@finter_colour=colour<N>` (host `color`, default 208) on remote wrapper sessions only. Agent-agnostic: only the hook adapter knows about Claude.
-- **`AgentEntry.inner`:** the pane lives on an inner server (this machine's or a host's); pane ids of the default and inner servers can collide, so always use the matching `Socket`. `local_session()` maps inner entries to their wrapper (`X~term` -> `X`, remote -> `host/X`).
-- **Inner server:** every project session lives on `tmux -L finter` of the machine owning the project (see `docs/adr/0001-project-sessions-live-on-the-inner-server.md`) (socket name overridable with `FINTER_INNER_SOCKET`, used by smoke tests). Sessions are `X`, `X~term` and, for windows and panes added by `finter new-window` / `split-window`, `X~term2`, `X~term3`... (`state::term_slot`).
+- **`AgentEntry.inner`:** the pane lives on an inner server (this machine's or a host's); pane ids of the default and inner servers can collide, so always use the matching `Socket`. `local_session()` maps inner entries to their wrapper (`X`, remote `host/X`).
+- **Inner server:** every project session lives on `tmux -L finter` of the machine owning the project (see `docs/adr/0001-project-sessions-live-on-the-inner-server.md`) (socket name overridable with `FINTER_INNER_SOCKET`, used by smoke tests). A project is one session `X` whose windows and panes are its terminals; every wrapper is one pane attached to it (`docs/adr/0002-one-inner-session-per-project.md`). Project keys reach it as `F12` + key (`inner.conf`'s `finter` key table).
 - **`finter list --json`:** `{"v":1,"projects":[...],"panes":[...]}`; bump `v` on incompatible changes (`remote::LIST_VERSION`).
 - **Cache:** `$XDG_RUNTIME_DIR/finter/<host>.json`, stale after 4s, offline flag keeps last data.
 
@@ -94,7 +94,7 @@ cargo run -- -d /path1 /path2  # Update config
 - Session names: `.` and `:` replaced with `_` (tmux limitation); remote wrappers are `host/X` (tmux accepts `/`)
 - Host names cannot contain whitespace, `/`, `:` or `.`
 - `finter hook` must exit 0 and stay quiet; with `$TMUX_PANE` unset it does nothing
-- tmux is assumed to use `base-index 1` on all hosts (`next` falls back to windows 1 and 2)
+- The inner server sets `base-index 1` itself (`inner.conf`); the outer config's indexing does not matter to finter
 
 ## Common Modification Patterns
 
