@@ -98,8 +98,9 @@ Remote project without a local wrapper:
 - Project names containing backslashes are not supported by the remote attach quoting.
 - Pane ids (`%3`) are per tmux server and can collide between the default and the inner server; code always pairs a pane id with its socket (`AgentEntry.inner`).
 - A plain `split-window` or `new-window` in a wrapper acts on the outer wrapper, not the project session; the project-key bindings send `F12` + key to the inner server instead.
+- A project is one inner session shared by every machine: `finter kill` on any machine ends it, and the other machines' wrappers close.
 - vim-tmux-navigator (`C-h/j/k/l`) is not forwarded: it moves between outer panes, and a wrapper is a single pane.
-- `inner.conf` is applied when the inner tmux server starts; changing it later needs a restart of that server (`tmux -L finter kill-server`) to take effect.
+- `inner.conf` is loaded when the inner tmux server starts and stamps it with `@finter_conf=<finter version>`; `finter attach` re-sources it into a running server whose stamp differs, so an upgrade takes effect without a restart. Settings removed from `inner.conf` stay until `tmux -L finter kill-server`.
 - The runtime directory (`$XDG_RUNTIME_DIR/finter`, or `<tmp>/finter-<uid>`) is created with mode 0700.
 - Only immediate subdirectories are considered projects.
 - `PermissionRequest` means `asking` as soon as the dialog opens; the hook prints nothing on stdout, so it never answers the prompt.

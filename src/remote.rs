@@ -23,6 +23,16 @@ pub(crate) const OFFLINE_TTL_SECS: u64 = 30;
 const SSH_DEADLINE: Duration = Duration::from_secs(6);
 
 const INNER_CONF: &str = include_str!("inner.conf");
+/// Server option recording which finter's `inner.conf` a running inner server has loaded.
+const CONF_OPTION: &str = "@finter_conf";
+
+/// `inner.conf` as written to disk: the embedded file plus a stamp of this finter's version.
+fn inner_conf_text() -> String {
+    format!(
+        "{INNER_CONF}\nset -g {CONF_OPTION} {}\n",
+        env!("CARGO_PKG_VERSION")
+    )
+}
 
 // ── list --json schema
 
@@ -399,11 +409,12 @@ pub(crate) fn find_project_path<'a>(
 fn write_inner_conf() -> Result<PathBuf, Box<dyn Error>> {
     let dir = ensure_runtime_dir()?;
     let path = dir.join("inner.conf");
-    if fs::read_to_string(&path).is_ok_and(|c| c == INNER_CONF) {
+    let text = inner_conf_text();
+    if fs::read_to_string(&path).is_ok_and(|c| c == text) {
         return Ok(path);
     }
     let tmp = dir.join(format!("inner.conf.{}", std::process::id()));
-    fs::write(&tmp, INNER_CONF)?;
+    fs::write(&tmp, text)?;
     fs::rename(&tmp, &path)?;
     Ok(path)
 }
@@ -426,6 +437,14 @@ pub(crate) fn exec_attach(name: &str, path: &str) -> Result<(), Box<dyn Error>> 
     };
     let target = format!("={name}");
     let ok = |cmd: &mut Command| cmd.status().is_ok_and(|s| s.success());
+    // `-f` only applies when the server starts. A server started by another finter
+    // version would lack the F12 key table or the status bar, so reload it.
+    let loaded = inner().args(["show", "-gqv", CONF_OPTION]).output();
+    if loaded.is_ok_and(|o| {
+        o.status.success() && String::from_utf8_lossy(&o.stdout).trim() != env!("CARGO_PKG_VERSION")
+    }) {
+        inner().arg("source-file").arg(&conf).status()?;
+    }
     // When another machine creates the session first, new-session fails and the
     // attach below joins that one.
     if !ok(inner().args(["has-session", "-t", &target]))
@@ -728,7 +747,7 @@ mod tests {
         );
         // inner.conf is written once and left alone when it already matches.
         let conf = write_inner_conf().unwrap();
-        assert_eq!(fs::read_to_string(&conf).unwrap(), INNER_CONF);
+        assert_eq!(fs::read_to_string(&conf).unwrap(), inner_conf_text());
         assert_eq!(write_inner_conf().unwrap(), conf);
         let _ = fs::remove_dir_all(&base);
         std::env::remove_var("XDG_RUNTIME_DIR");
@@ -836,6 +855,13 @@ mod tests {
             "prefix None",
             "base-index 1",
             "bind -n F12 switch-client -T finter",
+            "bind -T finter n next-window",
+            "bind -T finter p previous-window",
+            "bind -T finter = new-window",
+            "bind -T finter l split-window",
+            "bind -T finter q kill-pane",
+            "bind -T finter [ copy-mode",
+            "bind -T finter 9 select-window -t :=9",
             "mouse on",
             "set-clipboard on",
             "allow-passthrough on",

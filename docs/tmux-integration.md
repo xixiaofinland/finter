@@ -51,6 +51,10 @@ bind [ if -F '#{@finter_remote}' 'send-keys F12 [' 'copy-mode'
 bind 1 if -F '#{@finter_remote}' 'send-keys F12 1' 'select-window -t :=1'
 # ... and so on for 2-9
 
+# a wrapper is one window; its project's windows show in the inner status bar instead
+set -g window-status-format '#{?@finter_remote,,#I_#W}'
+set -g window-status-current-format '#{?@finter_remote,,#I_#W}'
+
 # kill the current session; for a wrapper also its inner sessions
 bind x run-shell "finter kill"
 

@@ -9,7 +9,7 @@ Since 0.4, a machine's projects opened from another host run on its `tmux -L fin
 
 ## Consequences
 
-- Local projects are nested too. The inner layer has no prefix and no status bar, so the outer tmux behaves as before.
+- Local projects are nested too. The inner layer has no prefix and no status bar, so the outer tmux behaves as before. Since ADR 0002 the inner layer shows a status bar with the project's windows.
 - `split-window` in a wrapper splits the outer wrapper pane: the new shell is outside the project's session and starts in the wrapper's cwd. Accepted for now (splits are rarely used); routing splits to the inner server is a later change if needed. Since 0.6, `finter split-window` splits the wrapper pane with another project terminal (`X~termN`), the same way `finter new-window` adds windows. Superseded by ADR 0002: a project is one inner session and splits happen inside it.
 - Two clients of different sizes on one inner session resize it to the latest active one.
 - The inner server keeps the environment of whichever `finter attach` started it, local or over ssh.

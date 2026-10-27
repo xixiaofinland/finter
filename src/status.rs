@@ -119,11 +119,12 @@ pub fn run_status(current_arg: Option<&str>) {
 /// Bring an inner agent pane to the front of its session (`alias` empty for this
 /// machine). Every client of the session follows, whichever machine it is on.
 fn focus_inner(alias: &str, entry: &AgentEntry) {
-    let window = format!("={}:{}", entry.session, entry.window);
+    // By pane id: a remote entry's window index can be seconds old, and closing a
+    // window renumbers the rest.
     let args = [
         "select-window",
         "-t",
-        &window,
+        &entry.pane_id,
         ";",
         "select-pane",
         "-t",
