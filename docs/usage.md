@@ -104,6 +104,7 @@ Killing the wrapper with plain `kill-session` leaves the inner session running, 
 | `Notification` | `asking`, message = notification text (`idle_prompt` is ignored) |
 | `Stop` | `done`, message = `last_assistant_message` (transcript tail as fallback, about 60 chars) |
 | `Stop` while background work is unfinished | stays `working` (see below) |
+| `Stop` in the pane you are looking at (active pane, focused client) | cleared, no `done` |
 | `SessionEnd` | all `@agent_*` options removed |
 
 Claude can end its turn while a background command, async agent or Monitor still runs, for example a CI watch, and is woken when it finishes. On `Stop` the hook reads the transcript tail, and while a background task has no `<task-notification>` yet the pane stays `working`; the `Stop` after the wake-up sets `done`. A background process that never exits (a dev server) keeps the pane `working`.
