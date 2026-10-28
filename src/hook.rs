@@ -68,12 +68,14 @@ pub(crate) enum Plan {
 }
 
 /// Map a hook event to a pane update, given the pane's current state.
-/// `background` is whether Claude still waits for background work at Stop.
+/// `background` is whether Claude still waits for background work at Stop;
+/// `watched` whether the user is looking at the pane then.
 pub(crate) fn decide(
     event: &str,
     notification_type: Option<&str>,
     current: Option<AgentState>,
     background: bool,
+    watched: bool,
 ) -> Plan {
     match event {
         "UserPromptSubmit" | "PreToolUse" => {
@@ -96,6 +98,9 @@ pub(crate) fn decide(
                 Plan::Set(AgentState::Working)
             }
         }
+        // The user saw the turn end, so there is nothing to come back to: no `done` badge
+        // (`finter seen` would never clear one, since no focus change follows).
+        "Stop" if watched => Plan::Clear,
         "Stop" => Plan::Set(AgentState::Done),
         "SessionEnd" => Plan::Clear,
         _ => Plan::Skip,
@@ -243,6 +248,47 @@ fn current_state(pane: &str) -> Option<AgentState> {
     AgentState::parse(String::from_utf8_lossy(&out.stdout).trim())
 }
 
+/// Whether a `display-message` of `#{window_active}#{pane_active}` and the `#{client_flags}`
+/// lines of the clients on the pane's session mean someone is looking at the pane.
+pub(crate) fn is_watched(active: &str, client_flags: &str) -> bool {
+    active.trim() == "11"
+        && client_flags
+            .lines()
+            .any(|l| l.split(',').any(|f| f == "focused"))
+}
+
+/// Whether the pane is on screen in a focused terminal: the active pane of its session's
+/// current window, with a client of that session holding focus. A wrapper's client on the
+/// inner server gets focus from the outer tmux (`focus-events`), so leaving the wrapper
+/// session, or the terminal, counts as looking away. Unknown means not watched.
+fn pane_watched(pane: &str) -> bool {
+    let Some(out) = tmux::run_deadline(
+        Socket::Default,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            pane,
+            "#{window_active}#{pane_active}\t#{session_id}",
+        ],
+        TMUX_DEADLINE,
+    ) else {
+        return false;
+    };
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let Some((active, session)) = line.split_once('\t') else {
+        return false;
+    };
+    let Some(clients) = tmux::run_deadline(
+        Socket::Default,
+        &["list-clients", "-t", session, "-F", "#{client_flags}"],
+        TMUX_DEADLINE,
+    ) else {
+        return false;
+    };
+    is_watched(active, &String::from_utf8_lossy(&clients.stdout))
+}
+
 fn run_tmux_args(args: &[String]) {
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     if tmux::run_deadline(Socket::Default, &refs, TMUX_DEADLINE).is_none() {
@@ -281,6 +327,7 @@ fn try_hook(agent: &str) -> Result<(), Box<dyn std::error::Error>> {
         _ => None,
     };
     let background = tail.as_deref().is_some_and(has_pending_background);
+    let watched = input.hook_event_name == "Stop" && !background && pane_watched(&pane);
     let current = match input.hook_event_name.as_str() {
         "UserPromptSubmit" | "PreToolUse" => current_state(&pane),
         "Stop" if background => current_state(&pane),
@@ -291,6 +338,7 @@ fn try_hook(agent: &str) -> Result<(), Box<dyn std::error::Error>> {
         input.notification_type.as_deref(),
         current,
         background,
+        watched,
     ) {
         Plan::Skip => {}
         Plan::Clear => {
@@ -333,6 +381,7 @@ mod tests {
                 i.notification_type.as_deref(),
                 cur,
                 false,
+                false,
             )
         };
         assert_eq!(
@@ -370,6 +419,7 @@ mod tests {
                 i.notification_type.as_deref(),
                 Some(AgentState::Done),
                 false,
+                false,
             )
         };
         let idle = r#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#;
@@ -386,11 +436,11 @@ mod tests {
     fn working_write_is_skipped_when_already_working() {
         for event in ["UserPromptSubmit", "PreToolUse"] {
             assert_eq!(
-                decide(event, None, Some(AgentState::Working), false),
+                decide(event, None, Some(AgentState::Working), false, false),
                 Plan::Skip
             );
             assert_eq!(
-                decide(event, None, Some(AgentState::Done), false),
+                decide(event, None, Some(AgentState::Done), false, false),
                 Plan::Set(AgentState::Working)
             );
         }
@@ -415,7 +465,13 @@ mod tests {
     #[test]
     fn permission_request_asks_with_tool_and_command() {
         assert_eq!(
-            decide("PermissionRequest", None, Some(AgentState::Working), false),
+            decide(
+                "PermissionRequest",
+                None,
+                Some(AgentState::Working),
+                false,
+                false
+            ),
             Plan::Set(AgentState::Asking)
         );
         let input = parse(
@@ -462,17 +518,50 @@ not json at all"#;
     #[test]
     fn stop_with_background_work_stays_working() {
         assert_eq!(
-            decide("Stop", None, Some(AgentState::Working), true),
+            decide("Stop", None, Some(AgentState::Working), true, false),
             Plan::Skip
         );
         assert_eq!(
-            decide("Stop", None, Some(AgentState::Asking), true),
+            decide("Stop", None, Some(AgentState::Asking), true, false),
             Plan::Set(AgentState::Working)
         );
         assert_eq!(
-            decide("Stop", None, None, true),
+            decide("Stop", None, None, true, false),
             Plan::Set(AgentState::Working)
         );
+    }
+
+    #[test]
+    fn stop_while_watched_clears_instead_of_done() {
+        assert_eq!(
+            decide("Stop", None, Some(AgentState::Working), false, true),
+            Plan::Clear
+        );
+        // Background work still wins: the turn is not the end of the work.
+        assert_eq!(
+            decide("Stop", None, Some(AgentState::Working), true, true),
+            Plan::Skip
+        );
+        // Only Stop looks at it; asking must stay visible.
+        assert_eq!(
+            decide("PermissionRequest", None, None, false, true),
+            Plan::Set(AgentState::Asking)
+        );
+    }
+
+    #[test]
+    fn watched_needs_active_pane_and_focused_client() {
+        assert!(is_watched("11", "attached,focused,UTF-8\n"));
+        assert!(is_watched(
+            "11\n",
+            "attached,UTF-8\nattached,focused,UTF-8\n"
+        ));
+        // Another window or pane of the session is on screen.
+        assert!(!is_watched("01", "attached,focused,UTF-8"));
+        assert!(!is_watched("10", "attached,focused,UTF-8"));
+        // The session is attached but its clients look elsewhere (wrapper left, terminal blurred).
+        assert!(!is_watched("11", "attached,UTF-8"));
+        assert!(!is_watched("11", ""));
     }
 
     // Lines shaped like Claude Code's: the launch result carries the id in `toolUseResult`, the
