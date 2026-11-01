@@ -4,6 +4,9 @@
 It lets you open a popup picker, fuzzy-find a folder, and jump into a matching tmux
 session (or create it if missing).
 
+> A personal tool, shaped around my own tmux, Tailscale and coding-agent setup.
+> It's public in case it's useful, but there's no support or compatibility promise.
+
 ![screenshot](https://github.com/xixiaofinland/finter/blob/master/pic/1.png)
 
 ## Install

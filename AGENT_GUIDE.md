@@ -149,6 +149,10 @@ bind C-o display-popup -E "finter"   # tmux binding example
 8. ✓ Update README.md if user-facing behavior changes
 9. ✓ Push - GitHub Actions will auto-publish to crates.io
 
+The repo and every crates.io release are public: commit messages, issues, PR bodies, docs and test
+fixtures never carry real hostnames, tailnet names, IPs, usernames or home paths. Use generic values
+(`mini`, `user`, `/home/user`, `192.0.2.x`), and redact pasted logs.
+
 Steps 5-7 and 9 are the maintainer's release step, done on master after merging. A PR (including
 one opened by an unattended agent) never bumps the version: merging a bump publishes to crates.io,
 which can't be undone.
