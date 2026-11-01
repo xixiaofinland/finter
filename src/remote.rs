@@ -145,9 +145,23 @@ pub(crate) fn parse_list_output(raw: &str) -> Result<ListOutput, String> {
     serde_json::from_value(value).map_err(|e| format!("bad remote JSON: {e}"))
 }
 
-/// Short, human-facing reason for a failed `ssh ... finter list --json`.
-pub(crate) fn ssh_failure_reason(code: Option<i32>) -> String {
+/// Tailscale SSH holds a connection in check mode until the user signs in at a URL.
+const TAILSCALE_CHECK: &str = "Tailscale SSH requires an additional check";
+
+/// Short, human-facing reason for a failed `ssh ... finter list --json`. ssh exits
+/// 255 for every connection or auth failure, so stderr tells them apart.
+pub(crate) fn ssh_failure_reason(code: Option<i32>, stderr: &str) -> String {
+    if stderr.contains(TAILSCALE_CHECK) {
+        return "tailscale sign-in".to_string();
+    }
     match code {
+        Some(255) if stderr.contains("Host key verification failed") => {
+            "host key mismatch".to_string()
+        }
+        Some(255) if stderr.contains("does not permit you to SSH") => {
+            "tailnet policy denies".to_string()
+        }
+        Some(255) if stderr.contains("Permission denied") => "auth failed".to_string(),
         Some(255) => "unreachable".to_string(),
         // clap's usage error: an old finter without the `list` subcommand.
         Some(2) => "finter too old?".to_string(),
@@ -276,15 +290,11 @@ pub(crate) fn ssh_run(alias: &str, remote_cmd: &str) -> Result<String, String> {
         .args(ssh_args(alias, remote_cmd))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| "ssh not found".to_string())?;
-    let mut stdout = child.stdout.take().ok_or("no stdout")?;
-    let reader = thread::spawn(move || {
-        let mut buf = String::new();
-        let _ = stdout.read_to_string(&mut buf);
-        buf
-    });
+    let reader = read_to_end(child.stdout.take().ok_or("no stdout")?);
+    let err_reader = read_to_end(child.stderr.take().ok_or("no stderr")?);
     let started = Instant::now();
     let status = loop {
         match child.try_wait().map_err(|e| e.to_string())? {
@@ -293,17 +303,31 @@ pub(crate) fn ssh_run(alias: &str, remote_cmd: &str) -> Result<String, String> {
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
+                // A Tailscale check holds the session open, so it surfaces as a timeout.
+                let stderr = err_reader.join().unwrap_or_default();
+                if stderr.contains(TAILSCALE_CHECK) {
+                    return Err(ssh_failure_reason(None, &stderr));
+                }
                 return Err("timed out".to_string());
             }
             None => thread::sleep(Duration::from_millis(20)),
         }
     };
     let out = reader.join().unwrap_or_default();
+    let stderr = err_reader.join().unwrap_or_default();
     if status.success() {
         Ok(out)
     } else {
-        Err(ssh_failure_reason(status.code()))
+        Err(ssh_failure_reason(status.code(), &stderr))
     }
+}
+
+fn read_to_end(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<String> {
+    thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = pipe.read_to_string(&mut buf);
+        buf
+    })
 }
 
 /// Fire-and-forget ssh; used where the caller must not wait (focus hooks).
@@ -647,10 +671,29 @@ mod tests {
 
     #[test]
     fn ssh_failures_get_short_reasons() {
-        assert_eq!(ssh_failure_reason(Some(255)), "unreachable");
-        assert_eq!(ssh_failure_reason(Some(2)), "finter too old?");
-        assert_eq!(ssh_failure_reason(Some(127)), "finter not found");
-        assert_eq!(ssh_failure_reason(Some(1)), "ssh exit 1");
+        let timeout = "ssh: connect to host mini port 22: Connection timed out\n";
+        assert_eq!(ssh_failure_reason(Some(255), timeout), "unreachable");
+        assert_eq!(ssh_failure_reason(Some(255), ""), "unreachable");
+        assert_eq!(ssh_failure_reason(Some(2), ""), "finter too old?");
+        assert_eq!(ssh_failure_reason(Some(127), ""), "finter not found");
+        assert_eq!(ssh_failure_reason(Some(1), ""), "ssh exit 1");
+    }
+
+    #[test]
+    fn ssh_auth_failures_are_told_apart_from_unreachable() {
+        let check = "# Tailscale SSH requires an additional check.\n\
+                     # To authenticate, visit: https://login.tailscale.com/a/x\n";
+        assert_eq!(ssh_failure_reason(None, check), "tailscale sign-in");
+        assert_eq!(ssh_failure_reason(Some(255), check), "tailscale sign-in");
+        let denied = "tailscale: tailnet policy does not permit you to SSH to this node\n";
+        assert_eq!(
+            ssh_failure_reason(Some(255), denied),
+            "tailnet policy denies"
+        );
+        let key = "Host key verification failed.\n";
+        assert_eq!(ssh_failure_reason(Some(255), key), "host key mismatch");
+        let auth = "xixiao@mini: Permission denied (publickey).\n";
+        assert_eq!(ssh_failure_reason(Some(255), auth), "auth failed");
     }
 
     #[test]
