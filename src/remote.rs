@@ -692,7 +692,7 @@ mod tests {
         );
         let key = "Host key verification failed.\n";
         assert_eq!(ssh_failure_reason(Some(255), key), "host key mismatch");
-        let auth = "xixiao@mini: Permission denied (publickey).\n";
+        let auth = "user@mini: Permission denied (publickey).\n";
         assert_eq!(ssh_failure_reason(Some(255), auth), "auth failed");
     }
 

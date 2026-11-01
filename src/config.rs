@@ -271,7 +271,7 @@ roots = ["/tmp"]
 
 [ssh]
 session_name = "ssh_mac_mini"
-primary = "xixiao@192.168.1.113"
+primary = "user@192.0.2.10"
 "#;
         let err = parse_config(content).expect_err("legacy [ssh] must be rejected");
         let msg = err.to_string();
@@ -293,19 +293,19 @@ primary = "xixiao@192.168.1.113"
     fn parse_config_reads_roots_config_with_modes() {
         let content = r#"
 [[roots_config]]
-path = "/home/finxxi/Projects"
+path = "/home/user/Projects"
 mode = "children"
 
 [[roots_config]]
-path = "/home/finxxi/notes"
+path = "/home/user/notes"
 mode = "direct"
 "#;
 
         let cfg = parse_config(content).expect("config should parse");
         assert_eq!(cfg.roots_config.len(), 2);
-        assert_eq!(cfg.roots_config[0].path, "/home/finxxi/Projects");
+        assert_eq!(cfg.roots_config[0].path, "/home/user/Projects");
         assert_eq!(cfg.roots_config[0].mode(), RootMode::Children);
-        assert_eq!(cfg.roots_config[1].path, "/home/finxxi/notes");
+        assert_eq!(cfg.roots_config[1].path, "/home/user/notes");
         assert_eq!(cfg.roots_config[1].mode(), RootMode::Direct);
         assert_eq!(cfg.roots.len(), 0);
     }
@@ -314,7 +314,7 @@ mode = "direct"
     fn parse_config_reads_roots_config() {
         let content = r#"
 [[roots_config]]
-path = "/home/finxxi/Projects"
+path = "/home/user/Projects"
 mode = "children"
 "#;
 
@@ -326,7 +326,7 @@ mode = "children"
     fn parse_config_defaults_mode_to_children_when_missing() {
         let content = r#"
 [[roots_config]]
-path = "/home/finxxi/Projects"
+path = "/home/user/Projects"
 "#;
 
         let cfg = parse_config(content).expect("config should parse");
@@ -337,17 +337,17 @@ path = "/home/finxxi/Projects"
     #[test]
     fn parse_config_merges_legacy_roots_and_roots_config() {
         let content = r#"
-roots = ["/home/finxxi/legacy"]
+roots = ["/home/user/legacy"]
 
 [[roots_config]]
-path = "/home/finxxi/notes"
+path = "/home/user/notes"
 mode = "direct"
 "#;
 
         let cfg = parse_config(content).expect("config should parse");
         assert_eq!(cfg.roots.len(), 1);
         assert_eq!(cfg.roots_config.len(), 1);
-        assert_eq!(cfg.roots_config[0].path, "/home/finxxi/notes");
+        assert_eq!(cfg.roots_config[0].path, "/home/user/notes");
         assert_eq!(cfg.roots_config[0].mode(), RootMode::Direct);
     }
 
