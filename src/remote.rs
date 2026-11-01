@@ -973,4 +973,43 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         assert_eq!(name, "myproj");
     }
+
+    // A machine's own additions apply on top of inner.conf, and a missing file is fine.
+    #[test]
+    fn inner_conf_sources_the_local_file_when_present() {
+        let base = std::env::temp_dir().join(format!("finter-local-{}", std::process::id()));
+        let conf = base.join("inner.conf");
+        fs::create_dir_all(base.join(".config/finter")).unwrap();
+        fs::write(&conf, inner_conf_text()).unwrap();
+        let socket = base.join("sock");
+        let status_right = || {
+            let tmux = |args: &[&str]| {
+                Command::new("tmux")
+                    .arg("-S")
+                    .arg(&socket)
+                    .arg("-f")
+                    .arg(&conf)
+                    .args(args)
+                    .env("HOME", &base)
+                    .env_remove("TMUX")
+                    .output()
+                    .unwrap()
+            };
+            let created = tmux(&["new-session", "-d", "-s", "t", "sleep 30"]);
+            assert!(created.status.success(), "{created:?}");
+            let out = tmux(&["show", "-gv", "status-right"]);
+            tmux(&["kill-server"]);
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let without = status_right();
+        fs::write(
+            base.join(".config/finter/inner.local.conf"),
+            "set -g status-right \"jobs\"\n",
+        )
+        .unwrap();
+        let with = status_right();
+        let _ = fs::remove_dir_all(&base);
+        assert_eq!(without, "");
+        assert_eq!(with, "jobs");
+    }
 }
