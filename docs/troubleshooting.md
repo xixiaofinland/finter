@@ -83,6 +83,7 @@ Fix:
 
 - Run it by hand: `ssh -o BatchMode=yes <alias> finter list --json`.
 - The status bar shows a short reason: `unreachable`, `timed out`, `finter too old?` (remote finter lacks `list`), or `finter not found`.
+- `tailscale sign-in` (after a reboot or once the check period runs out): pick the `mini: sign in` row at the top of the picker and approve in the browser tab it opens; the picker then comes back with the host's projects. If no browser opens, click the URL printed in the popup.
 - Cached data from the last successful refresh is kept and marked offline; it is stored in `$XDG_RUNTIME_DIR/finter/<host>.json`.
 
 ## Remote window closes right away

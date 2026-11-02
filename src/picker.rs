@@ -1,9 +1,9 @@
 use crate::config::{get_home_dir, HostConfig};
-use crate::remote::HostState;
+use crate::remote::{HostState, SIGN_IN_REASON};
 use crate::state::{
     age_secs, best_per_project, format_age, wrapper_session, AgentEntry, AgentState,
 };
-use crate::status::{local_target, parse_wrapper, remote_target};
+use crate::status::{local_target, parse_wrapper, remote_target, sign_in_target};
 use ratatui_core::style::{Color, Modifier, Style};
 use ratatui_core::text::{Line, Span};
 use skim::prelude::*;
@@ -12,8 +12,18 @@ use std::error::Error;
 /// What selecting a row does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Target {
-    Local { session: String, path: String },
-    Remote { host: HostConfig, project: String },
+    Local {
+        session: String,
+        path: String,
+    },
+    Remote {
+        host: HostConfig,
+        project: String,
+    },
+    /// Pass the host's Tailscale SSH check, then show the picker again.
+    SignIn {
+        host: HostConfig,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +49,7 @@ impl Row {
         match &self.target {
             Target::Local { session, .. } => local_target(session),
             Target::Remote { host, project } => remote_target(&host.ssh, project),
+            Target::SignIn { host } => sign_in_target(&host.ssh),
         }
     }
 
@@ -81,7 +92,9 @@ impl SkimItem for Row {
         spans.push(Span::raw(" "));
         // Same colour as the wrapper session's name in the tmux status-left.
         let name_style = match &self.target {
-            Target::Remote { host, .. } => Style::new().fg(Color::Indexed(host.color())),
+            Target::Remote { host, .. } | Target::SignIn { host } => {
+                Style::new().fg(Color::Indexed(host.color()))
+            }
             Target::Local { .. } => Style::new(),
         };
         spans.push(Span::styled(self.name.as_str(), name_style));
@@ -228,6 +241,23 @@ pub(crate) fn build_rows(
             rows.insert(0, row);
         }
     }
+
+    // A host waiting on a Tailscale sign-in lists nothing until it passes, so its
+    // sign-in row goes on top.
+    let sign_ins = hosts
+        .iter()
+        .filter(|h| h.offline && h.error.as_deref() == Some(SIGN_IN_REASON))
+        .map(|h| {
+            mk(
+                format!("{}: sign in", h.host.name),
+                Target::SignIn {
+                    host: h.host.clone(),
+                },
+                false,
+                (None, Vec::new()),
+            )
+        });
+    rows.splice(0..0, sign_ins.collect::<Vec<_>>());
 
     let width = rows
         .iter()
@@ -710,6 +740,24 @@ mod tests {
         assert_eq!(name_fg(&rows[0], "mini/recap"), Some(Color::Indexed(228)));
         let rows = build_rows(&[], &["a".into()], &[], &[], &[], None, 0);
         assert_eq!(name_fg(&rows[0], "a"), None);
+    }
+
+    #[test]
+    fn host_waiting_on_sign_in_gets_a_row_on_top() {
+        let mut hs = host_state(&[], vec![], true);
+        hs.data = None;
+        hs.error = Some(SIGN_IN_REASON.to_string());
+        let rows = build_rows(&[], &["a".into()], &[], &[], &[hs], Some("a"), 0);
+        assert_eq!(names(&rows), ["mini: sign in", "a"]);
+        assert_eq!(rows[0].key(), "signin:mac-mini");
+        assert!(matches!(rows[0].target, Target::SignIn { .. }));
+
+        let mut other = host_state(&[], vec![], true);
+        other.error = Some("unreachable".to_string());
+        let rows = build_rows(&[], &[], &[], &[], &[other], None, 0);
+        assert!(rows
+            .iter()
+            .all(|r| !matches!(r.target, Target::SignIn { .. })));
     }
 
     #[test]

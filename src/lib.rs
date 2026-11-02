@@ -7,7 +7,7 @@ mod status;
 mod tmux;
 mod watch;
 
-use config::{get_folders, load_config, load_project_paths};
+use config::{get_folders, load_config, load_project_paths, HostConfig};
 use picker::{build_rows, get_match, offline_header, select_in_skim, Target};
 use std::error::Error;
 use tmux::{get_current_session, get_sessions, run_tmux_with_args, Socket};
@@ -19,6 +19,16 @@ pub use watch::run_watch;
 pub type MyResult<T> = Result<T, Box<dyn Error>>;
 
 pub fn run_finter() -> Result<(), Box<dyn Error>> {
+    loop {
+        match pick()? {
+            Some(host) => remote::sign_in(&host)?,
+            None => return Ok(()),
+        }
+    }
+}
+
+/// One picker round; Some(host) when the row picked is that host's sign-in.
+fn pick() -> Result<Option<HostConfig>, Box<dyn Error>> {
     let config = load_config()?;
     let paths = load_project_paths(&config)?;
     let folders = get_folders(paths)?;
@@ -60,13 +70,14 @@ pub fn run_finter() -> Result<(), Box<dyn Error>> {
             }
             wrapper
         }
+        Target::SignIn { host } => return Ok(Some(host)),
     };
 
     let result = run_tmux_with_args(&["switch-client", "-t", &session_name]);
     if !result.status.success() {
         run_tmux_with_args(&["attach", "-t", &session_name]);
     }
-    Ok(())
+    Ok(None)
 }
 
 /// `finter list`: this machine's projects and agent panes on the inner server.

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
     fs,
-    io::Read,
+    io::{BufRead, BufReader, Read},
     os::unix::process::CommandExt,
     path::PathBuf,
     process::{Command, Stdio},
@@ -147,12 +147,14 @@ pub(crate) fn parse_list_output(raw: &str) -> Result<ListOutput, String> {
 
 /// Tailscale SSH holds a connection in check mode until the user signs in at a URL.
 const TAILSCALE_CHECK: &str = "Tailscale SSH requires an additional check";
+/// Offline reason for a host waiting on a Tailscale sign-in; the picker offers a sign-in row.
+pub(crate) const SIGN_IN_REASON: &str = "tailscale sign-in";
 
 /// Short, human-facing reason for a failed `ssh ... finter list --json`. ssh exits
 /// 255 for every connection or auth failure, so stderr tells them apart.
 pub(crate) fn ssh_failure_reason(code: Option<i32>, stderr: &str) -> String {
     if stderr.contains(TAILSCALE_CHECK) {
-        return "tailscale sign-in".to_string();
+        return SIGN_IN_REASON.to_string();
     }
     match code {
         Some(255) if stderr.contains("Host key verification failed") => {
@@ -338,6 +340,57 @@ pub(crate) fn ssh_spawn(alias: &str, remote_cmd: &str) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
+}
+
+/// The sign-in URL in a line of Tailscale's check banner
+/// (`# To authenticate, visit: https://...`).
+pub(crate) fn sign_in_url(line: &str) -> Option<&str> {
+    let start = line.find("https://")?;
+    line[start..].split_whitespace().next()
+}
+
+/// Pass a Tailscale SSH check for `host` in the foreground: ssh without BatchMode,
+/// echo its banner, open the sign-in URL in the browser, and wait until ssh is let
+/// through (Ctrl-C gives up). Tailscale then lets every ssh through for its check
+/// period, so the host's cache is dropped for the next refresh to pick it up.
+pub(crate) fn sign_in(host: &HostConfig) -> Result<(), Box<dyn Error>> {
+    eprintln!("finter: connecting to {} ...", host.ssh);
+    let mut child = Command::new("ssh")
+        .args(["-o", "ConnectTimeout=5", &host.ssh, "true"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| "ssh not found")?;
+    let stderr = child.stderr.take().ok_or("no stderr")?;
+    let mut opened = false;
+    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+        eprintln!("{line}");
+        if let (false, Some(url)) = (opened, sign_in_url(&line)) {
+            opened = open_url(url);
+        }
+    }
+    let status = child.wait()?;
+    let _ = fs::remove_file(cache_path(&host.name));
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("ssh {} failed ({status})", host.ssh).into())
+    }
+}
+
+fn open_url(url: &str) -> bool {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    Command::new(opener)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
 }
 
 /// The inner-server tmux command prefix for a remote shell.
@@ -694,6 +747,18 @@ mod tests {
         assert_eq!(ssh_failure_reason(Some(255), key), "host key mismatch");
         let auth = "user@mini: Permission denied (publickey).\n";
         assert_eq!(ssh_failure_reason(Some(255), auth), "auth failed");
+    }
+
+    #[test]
+    fn sign_in_url_is_read_from_the_check_banner() {
+        assert_eq!(
+            sign_in_url("# To authenticate, visit: https://login.tailscale.com/a/abc123"),
+            Some("https://login.tailscale.com/a/abc123")
+        );
+        assert_eq!(
+            sign_in_url("# Tailscale SSH requires an additional check."),
+            None
+        );
     }
 
     #[test]

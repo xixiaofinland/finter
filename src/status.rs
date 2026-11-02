@@ -362,6 +362,10 @@ pub(crate) fn remote_target(alias: &str, session: &str) -> String {
     format!("remote:{alias}:{session}")
 }
 
+pub(crate) fn sign_in_target(alias: &str) -> String {
+    format!("signin:{alias}")
+}
+
 pub(crate) fn parse_target(target: &str) -> Option<(Option<&str>, &str)> {
     if let Some(session) = target.strip_prefix("local:") {
         return Some((None, session));
@@ -400,6 +404,10 @@ pub(crate) fn tail_lines(text: &str, n: usize) -> String {
 }
 
 pub fn run_preview(target: &str) {
+    if let Some(alias) = target.strip_prefix("signin:") {
+        println!("Tailscale SSH wants a sign-in for {alias}.\n\nEnter: open the sign-in page in the browser, wait for it, then reload.");
+        return;
+    }
     let Some((alias, session)) = parse_target(target) else {
         println!("(bad preview target)");
         return;
