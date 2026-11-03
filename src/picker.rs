@@ -235,11 +235,11 @@ pub(crate) fn build_rows(
         (r.group(), since)
     });
 
+    // Picking the current session is a no-op switch, and skim's match ranking would
+    // otherwise put it above a similarly named session (`dotfiles-nix` over
+    // `mini/dotfiles-nix`) whatever order the rows come in.
     if let Some(current) = current_session {
-        if let Some(idx) = rows.iter().position(|r| r.name == current) {
-            let row = rows.remove(idx);
-            rows.insert(0, row);
-        }
+        rows.retain(|r| r.name != current);
     }
 
     // A host waiting on a Tailscale sign-in lists nothing until it passes, so its
@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn current_session_goes_first() {
+    fn current_session_is_left_out() {
         let rows = build_rows(
             &folders(&["repo1"]),
             &["other".into(), "work".into()],
@@ -442,7 +442,7 @@ mod tests {
             Some("work"),
             0,
         );
-        assert_eq!(rows[0].name, "work");
+        assert_eq!(names(&rows), ["other", "repo1"]);
     }
 
     #[test]
@@ -747,7 +747,7 @@ mod tests {
         let mut hs = host_state(&[], vec![], true);
         hs.data = None;
         hs.error = Some(SIGN_IN_REASON.to_string());
-        let rows = build_rows(&[], &["a".into()], &[], &[], &[hs], Some("a"), 0);
+        let rows = build_rows(&[], &["a".into()], &[], &[], &[hs], None, 0);
         assert_eq!(names(&rows), ["mini: sign in", "a"]);
         assert_eq!(rows[0].key(), "signin:mac-mini");
         assert!(matches!(rows[0].target, Target::SignIn { .. }));
